@@ -1,18 +1,18 @@
-// APP DI MONTAGGIO — PEZZO 1 (versione robusta: FFmpeg legge Drive direttamente)
+// APP DI MONTAGGIO — PEZZO 1 (versione definitiva funzionante)
 // Netlify BACKGROUND function.
 //
 // Riceve { driveFileId } = l'ID su Google Drive del VIDEO GREZZO.
-// - Legge i metadati del video (nome, dimensione, cartella genitore).
-// - Crea (o riusa) una sottocartella "Trascrizioni" ACCANTO al video.
-// - FFmpeg legge il video DIRETTAMENTE dall'URL di Drive (con range request):
-//   puo' "riavvolgere" quindi gestisce qualunque formato (.mov iPhone, .mp4, ecc.)
-//   e NON scarica mai l'intero video su disco (regge i file grossi).
-//   A terra finisce solo l'audio .mp3 mono 16kHz, ideale per Whisper.
-// - Trascrive l'audio con Whisper (timestamp per parola e per segmento).
-// - Salva il JSON completo in "Trascrizioni".
-// In caso di errore scrive un file "... - ERRORE.json" nella stessa cartella.
+// - FFmpeg legge il video DIRETTAMENTE dall'URL di Drive (range request):
+//   gestisce qualunque formato e NON scarica il video intero (regge i file grossi).
+//   A terra finisce solo l'audio .mp3 mono 16kHz.
+// - Trascrive con Whisper (timestamp per parola e per segmento).
+// - Salva il JSON nel DRIVE CONDIVISO (Shared Drive), dove il Service Account
+//   ha quota e puo' creare file nuovi. Sottocartella dedicata "Montaggio - Trascrizioni".
+//   (Su "Il mio Drive" di un Gmail il SA non puo' creare: no storage quota.)
+// - Salvataggio "a due passi" (crea metadati -> PATCH contenuto), come fa Palinsesto.
+// In caso di errore scrive un file "... - ERRORE.json" nella stessa sottocartella.
 //
-// Nessun legame con Google Calendar. Variabili: GOOGLE_SA_JSON, OPENAI_API_KEY.
+// Variabili: GOOGLE_SA_JSON, OPENAI_API_KEY.
 // NOME FILE: deve finire con "-background".
 
 const crypto = require("crypto");
@@ -21,7 +21,11 @@ const { spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static");
 
 const SCOPE = "https://www.googleapis.com/auth/drive";
-const OUTPUT_SUBFOLDER = "Trascrizioni";
+
+// Drive Condiviso di Palinsesto (il Service Account e' gia' membro con scrittura).
+const SHARED_DRIVE_ROOT = "0AHzoAcSv08WLUk9PVA";
+// Sottocartella dedicata agli output del tool (creata al primo avvio dentro il Drive Condiviso).
+const OUTPUT_SUBFOLDER = "Montaggio - Trascrizioni";
 
 function b64url(buf){ return Buffer.from(buf).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
 
@@ -49,10 +53,11 @@ async function getFileMeta(token, fileId){
   return gDrive(token, "/files/" + encodeURIComponent(fileId) + "?" + p.toString());
 }
 
+// Cerca una sottocartella per nome dentro un parent, sui Drive condivisi.
 async function findFolder(token, name, parentId){
   const safe = String(name).replace(/'/g, "\\'");
   const q = `name = '${safe}' and mimeType = 'application/vnd.google-apps.folder' and '${parentId}' in parents and trashed = false`;
-  const p = new URLSearchParams({ q, fields:"files(id)", includeItemsFromAllDrives:"true", supportsAllDrives:"true", pageSize:"1" });
+  const p = new URLSearchParams({ q, fields:"files(id)", includeItemsFromAllDrives:"true", supportsAllDrives:"true", corpora:"allDrives", pageSize:"1" });
   const d = await gDrive(token, "/files?" + p.toString());
   return (d.files && d.files[0]) ? d.files[0].id : null;
 }
@@ -70,21 +75,15 @@ async function findOrCreateFolder(token, name, parentId){
   return d.id;
 }
 
-// >>> FFmpeg legge il video DIRETTAMENTE dall'URL di Drive (con header Authorization).
-// FFmpeg puo' fare "range request" su questo URL, quindi riavvolge quando serve
-// (indispensabile per i .mov/.mp4 con indice in fondo) senza scaricare tutto il file.
+// FFmpeg legge il video direttamente dall'URL di Drive ed estrae solo l'audio.
 function extractAudioFromDriveUrl(token, driveFileId, outAudioPath){
   return new Promise((resolve, reject) => {
     const url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(driveFileId) + "?alt=media&supportsAllDrives=true";
     const ff = spawn(ffmpegPath, [
       "-y",
-      // passa l'header di autenticazione al lettore HTTP interno di FFmpeg
       "-headers", "Authorization: Bearer " + token + "\r\n",
-      "-i", url,        // input = URL di Drive (FFmpeg lo legge lui, a pezzi)
-      "-vn",            // niente video
-      "-ac", "1",       // audio mono
-      "-ar", "16000",   // 16 kHz
-      "-b:a", "64k",    // bitrate basso
+      "-i", url,
+      "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k",
       outAudioPath
     ]);
     let err = "";
@@ -110,25 +109,24 @@ async function whisperVerbose(audioPath){
   return d;
 }
 
-async function uploadJsonToDrive(token, parentId, name, obj){
-  const boundary = "boundary_" + crypto.randomBytes(8).toString("hex");
-  const metadata = { name, parents: [parentId], mimeType: "application/json" };
-  const body =
-    "--" + boundary + "\r\n" +
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
-    JSON.stringify(metadata) + "\r\n" +
-    "--" + boundary + "\r\n" +
-    "Content-Type: application/json\r\n\r\n" +
-    JSON.stringify(obj) + "\r\n" +
-    "--" + boundary + "--";
-  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name", {
-    method: "POST",
-    headers: { "Authorization":"Bearer "+token, "Content-Type": "multipart/related; boundary=" + boundary },
-    body
+// Salvataggio "a due passi" (come Palinsesto): 1) crea metadati -> fileId  2) PATCH media contenuto.
+async function createJsonOnDrive(token, parentId, name, obj){
+  // Passo 1: crea il file (solo metadati) sul Drive Condiviso.
+  const meta = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id", {
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify({ name, mimeType:"application/json", parents:[parentId] })
   });
-  if(!res.ok) throw new Error("Drive upload " + res.status + " " + (await res.text()).slice(0,140));
-  const d = await res.json();
-  return d.id;
+  if(!meta.ok) throw new Error("Drive create " + meta.status + " " + (await meta.text()).slice(0,140));
+  const fileId = (await meta.json()).id;
+  // Passo 2: scrivi il contenuto.
+  const put = await fetch("https://www.googleapis.com/upload/drive/v3/files/" + fileId + "?uploadType=media&supportsAllDrives=true", {
+    method:"PATCH",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify(obj, null, 2)
+  });
+  if(!put.ok) throw new Error("Drive write " + put.status + " " + (await put.text()).slice(0,140));
+  return fileId;
 }
 
 exports.handler = async (event) => {
@@ -142,27 +140,27 @@ exports.handler = async (event) => {
     const sa = JSON.parse(process.env.GOOGLE_SA_JSON);
     token = await getSaToken(sa, SCOPE);
 
-    // 1) Metadati + cartella di output.
+    // 1) Metadati del video (per nome + verifica sia un video).
     const meta = await getFileMeta(token, driveFileId);
     if(!meta || !meta.id) throw new Error("File Drive non trovato: " + driveFileId);
     if(!String(meta.mimeType||"").startsWith("video/")) throw new Error("Il file non e' un video (" + meta.mimeType + ").");
     baseName = String(meta.name || "video").replace(/\.[^.]+$/, "");
-    const parentId = (meta.parents && meta.parents[0]) ? meta.parents[0] : null;
-    if(!parentId) throw new Error("Il video non ha una cartella genitore accessibile.");
-    outFolderId = await findOrCreateFolder(token, OUTPUT_SUBFOLDER, parentId);
 
-    // 2) FFmpeg legge Drive direttamente ed estrae solo l'audio.
-    console.log("Estraggo l'audio leggendo da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
+    // 2) Cartella di output SUL DRIVE CONDIVISO (dove il SA puo' creare file).
+    outFolderId = await findOrCreateFolder(token, OUTPUT_SUBFOLDER, SHARED_DRIVE_ROOT);
+
+    // 3) FFmpeg legge Drive direttamente ed estrae solo l'audio.
+    console.log("Estraggo l'audio da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
     await extractAudioFromDriveUrl(token, driveFileId, aud);
 
-    // 3) Controllo che l'audio sia stato prodotto davvero.
+    // 4) Controllo audio.
     let sizeMB = 0;
     try { sizeMB = fs.statSync(aud).size / 1048576; } catch(_){ sizeMB = 0; }
     console.log("Audio " + sizeMB.toFixed(2) + " MB -> Whisper...");
-    if(sizeMB < 0.005) throw new Error("Audio vuoto: FFmpeg non ha estratto suono dal video (formato o lettura non riuscita).");
+    if(sizeMB < 0.005) throw new Error("Audio vuoto: FFmpeg non ha estratto suono dal video.");
     if(sizeMB > 24.5) throw new Error("Audio troppo lungo per la trascrizione (oltre ~24 MB, ~50 min).");
 
-    // 4) Trascrizione con timestamp.
+    // 5) Trascrizione con timestamp.
     const v = await whisperVerbose(aud);
     try { fs.unlinkSync(aud); } catch(_){}
     const text = (v.text || "").trim();
@@ -170,7 +168,7 @@ exports.handler = async (event) => {
     const words = Array.isArray(v.words) ? v.words : [];
     const segments = Array.isArray(v.segments) ? v.segments : [];
 
-    // 5) JSON completo in "Trascrizioni".
+    // 6) JSON completo salvato sul Drive Condiviso.
     const transcriptObj = {
       version: 1,
       createdAt: new Date().toISOString(),
@@ -182,14 +180,14 @@ exports.handler = async (event) => {
       words: words.map(function(w){ return { word: w.word, start: w.start, end: w.end }; }),
     };
     const jsonName = baseName + " - trascrizione.json";
-    const fileId = await uploadJsonToDrive(token, outFolderId, jsonName, transcriptObj);
+    const fileId = await createJsonOnDrive(token, outFolderId, jsonName, transcriptObj);
     console.log("OK: " + words.length + " parole, " + segments.length + " segmenti -> " + jsonName + " (" + fileId + ")");
     return { statusCode:200 };
   } catch(e){
     try { fs.unlinkSync(aud); } catch(_){}
     const msg = String((e && e.message) || e).slice(0, 300);
     console.log("ERRORE:", msg);
-    try { if(token && outFolderId){ await uploadJsonToDrive(token, outFolderId, baseName + " - ERRORE.json", { error: msg, at: new Date().toISOString(), driveFileId }); } } catch(_){}
+    try { if(token && outFolderId){ await createJsonOnDrive(token, outFolderId, baseName + " - ERRORE.json", { error: msg, at: new Date().toISOString(), driveFileId }); } } catch(_){}
     return { statusCode:500 };
   }
 };
