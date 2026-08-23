@@ -1,0 +1,10 @@
+[build]
+  publish = "."
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[functions."trascrivi-grezzo-background"]
+  included_files = ["node_modules/ffmpeg-static/**"]
+  external_node_modules = ["ffmpeg-static"]

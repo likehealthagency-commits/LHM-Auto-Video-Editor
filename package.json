@@ -1,0 +1,7 @@
+{
+  "name": "lhm-auto-video-editor",
+  "version": "1.0.0",
+  "dependencies": {
+    "ffmpeg-static": "5.2.0"
+  }
+}
