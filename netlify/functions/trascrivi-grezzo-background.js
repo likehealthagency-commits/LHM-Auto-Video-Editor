@@ -1,12 +1,13 @@
-// APP DI MONTAGGIO — PEZZO 1 (versione streaming, regge i video grossi)
+// APP DI MONTAGGIO — PEZZO 1 (versione robusta: FFmpeg legge Drive direttamente)
 // Netlify BACKGROUND function.
 //
 // Riceve { driveFileId } = l'ID su Google Drive del VIDEO GREZZO.
 // - Legge i metadati del video (nome, dimensione, cartella genitore).
 // - Crea (o riusa) una sottocartella "Trascrizioni" ACCANTO al video.
-// - Fa scorrere il flusso del video da Drive DIRETTAMENTE dentro FFmpeg,
-//   SENZA salvarlo su disco: a terra ci finisce solo l'audio (pochi MB).
-//   Cosi' regge anche i video da centinaia di MB / qualche GB.
+// - FFmpeg legge il video DIRETTAMENTE dall'URL di Drive (con range request):
+//   puo' "riavvolgere" quindi gestisce qualunque formato (.mov iPhone, .mp4, ecc.)
+//   e NON scarica mai l'intero video su disco (regge i file grossi).
+//   A terra finisce solo l'audio .mp3 mono 16kHz, ideale per Whisper.
 // - Trascrive l'audio con Whisper (timestamp per parola e per segmento).
 // - Salva il JSON completo in "Trascrizioni".
 // In caso di errore scrive un file "... - ERRORE.json" nella stessa cartella.
@@ -17,8 +18,6 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const { spawn } = require("child_process");
-const { pipeline } = require("stream/promises");
-const { Readable } = require("stream");
 const ffmpegPath = require("ffmpeg-static");
 
 const SCOPE = "https://www.googleapis.com/auth/drive";
@@ -71,42 +70,27 @@ async function findOrCreateFolder(token, name, parentId){
   return d.id;
 }
 
-// >>> NUOVO: scarica il video in streaming da Drive e lo fa passare DENTRO FFmpeg,
-// che scrive solo l'audio su /tmp. Il video non viene mai salvato per intero.
-function streamVideoToAudio(token, driveFileId, outAudioPath){
-  return new Promise(async (resolve, reject) => {
-    try {
-      const dl = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(driveFileId) + "?alt=media&supportsAllDrives=true", { headers:{ "Authorization":"Bearer "+token } });
-      if(!dl.ok || !dl.body) return reject(new Error("Download video " + dl.status));
-
-      // FFmpeg legge il video dallo standard input (pipe:0) ed estrae solo l'audio.
-      const ff = spawn(ffmpegPath, [
-        "-y",
-        "-i", "pipe:0",         // input = flusso in arrivo
-        "-vn",                  // niente video
-        "-ac", "1",             // audio mono
-        "-ar", "16000",         // 16 kHz
-        "-b:a", "64k",          // bitrate basso
-        outAudioPath
-      ]);
-
-      let err = "";
-      ff.stderr.on("data", (d)=>{ err += d.toString(); });
-      ff.on("error", reject);
-      ff.on("close", (code)=> code === 0 ? resolve() : reject(new Error("ffmpeg " + code + ": " + err.slice(-200))));
-
-      // Collega il flusso di Drive all'ingresso di FFmpeg.
-      // Se FFmpeg chiude l'ingresso prima della fine (EPIPE), lo ignoriamo: e' normale.
-      try {
-        await pipeline(Readable.fromWeb(dl.body), ff.stdin);
-      } catch(pipeErr){
-        if(pipeErr && pipeErr.code !== "EPIPE" && pipeErr.code !== "ERR_STREAM_PREMATURE_CLOSE"){
-          // errore vero di rete: proviamo a chiudere ffmpeg e segnaliamo
-          try { ff.kill("SIGKILL"); } catch(_){}
-          return reject(pipeErr);
-        }
-      }
-    } catch(e){ reject(e); }
+// >>> FFmpeg legge il video DIRETTAMENTE dall'URL di Drive (con header Authorization).
+// FFmpeg puo' fare "range request" su questo URL, quindi riavvolge quando serve
+// (indispensabile per i .mov/.mp4 con indice in fondo) senza scaricare tutto il file.
+function extractAudioFromDriveUrl(token, driveFileId, outAudioPath){
+  return new Promise((resolve, reject) => {
+    const url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(driveFileId) + "?alt=media&supportsAllDrives=true";
+    const ff = spawn(ffmpegPath, [
+      "-y",
+      // passa l'header di autenticazione al lettore HTTP interno di FFmpeg
+      "-headers", "Authorization: Bearer " + token + "\r\n",
+      "-i", url,        // input = URL di Drive (FFmpeg lo legge lui, a pezzi)
+      "-vn",            // niente video
+      "-ac", "1",       // audio mono
+      "-ar", "16000",   // 16 kHz
+      "-b:a", "64k",    // bitrate basso
+      outAudioPath
+    ]);
+    let err = "";
+    ff.stderr.on("data", (d)=>{ err += d.toString(); });
+    ff.on("error", reject);
+    ff.on("close", (code)=> code === 0 ? resolve() : reject(new Error("ffmpeg " + code + ": " + err.slice(-300))));
   });
 }
 
@@ -167,13 +151,15 @@ exports.handler = async (event) => {
     if(!parentId) throw new Error("Il video non ha una cartella genitore accessibile.");
     outFolderId = await findOrCreateFolder(token, OUTPUT_SUBFOLDER, parentId);
 
-    // 2) Video in streaming DENTRO FFmpeg -> solo audio su /tmp (niente video su disco).
-    console.log("Elaboro il video in streaming (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ") -> audio...");
-    await streamVideoToAudio(token, driveFileId, aud);
+    // 2) FFmpeg legge Drive direttamente ed estrae solo l'audio.
+    console.log("Estraggo l'audio leggendo da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
+    await extractAudioFromDriveUrl(token, driveFileId, aud);
 
-    // 3) Limite Whisper (~25 MB).
-    const sizeMB = fs.statSync(aud).size / 1048576;
+    // 3) Controllo che l'audio sia stato prodotto davvero.
+    let sizeMB = 0;
+    try { sizeMB = fs.statSync(aud).size / 1048576; } catch(_){ sizeMB = 0; }
     console.log("Audio " + sizeMB.toFixed(2) + " MB -> Whisper...");
+    if(sizeMB < 0.005) throw new Error("Audio vuoto: FFmpeg non ha estratto suono dal video (formato o lettura non riuscita).");
     if(sizeMB > 24.5) throw new Error("Audio troppo lungo per la trascrizione (oltre ~24 MB, ~50 min).");
 
     // 4) Trascrizione con timestamp.
