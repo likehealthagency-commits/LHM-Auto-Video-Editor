@@ -22,9 +22,14 @@ const ffmpegPath = require("ffmpeg-static");
 
 const SCOPE = "https://www.googleapis.com/auth/drive";
 
-// Drive Condiviso di Palinsesto (il Service Account e' gia' membro con scrittura).
-const SHARED_DRIVE_ROOT = "0AHzoAcSv08WLUk9PVA";
-// Sottocartella dedicata agli output del tool (creata al primo avvio dentro il Drive Condiviso).
+// IMPORTANTE: NON si usa la radice del Drive Condiviso (0A...) come parent: il Service
+// Account non e' membro dell'intero drive, quindi la radice per lui "non esiste" (404).
+// Si usa invece una CARTELLA condivisa col Service Account. Qui: la "cartella madre" dei
+// clienti di Palinsesto, che e' sul Drive Condiviso ed e' scrivibile dal SA.
+// (In futuro, per tenere gli output separati, sostituire con l'ID di una cartella dedicata
+//  creata nel Drive Condiviso e condivisa col Service Account.)
+const OUTPUT_PARENT = "1e81onqkdfnzuCUi8eYmmgoYhKfTaqsHe";
+// Sottocartella dedicata agli output del tool (creata al primo avvio dentro OUTPUT_PARENT).
 const OUTPUT_SUBFOLDER = "Montaggio - Trascrizioni";
 
 function b64url(buf){ return Buffer.from(buf).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
@@ -146,8 +151,8 @@ exports.handler = async (event) => {
     if(!String(meta.mimeType||"").startsWith("video/")) throw new Error("Il file non e' un video (" + meta.mimeType + ").");
     baseName = String(meta.name || "video").replace(/\.[^.]+$/, "");
 
-    // 2) Cartella di output SUL DRIVE CONDIVISO (dove il SA puo' creare file).
-    outFolderId = await findOrCreateFolder(token, OUTPUT_SUBFOLDER, SHARED_DRIVE_ROOT);
+    // 2) Cartella di output dentro una cartella condivisa col SA (sul Drive Condiviso).
+    outFolderId = await findOrCreateFolder(token, OUTPUT_SUBFOLDER, OUTPUT_PARENT);
 
     // 3) FFmpeg legge Drive direttamente ed estrae solo l'audio.
     console.log("Estraggo l'audio da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
