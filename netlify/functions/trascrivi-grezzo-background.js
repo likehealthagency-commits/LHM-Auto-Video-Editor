@@ -62,21 +62,24 @@ async function whisperVerbose(audioPath){
 }
 
 // ---------- RECUPERO PARLATO SALTATO ----------
-function detectSilences(audioPath){
+function analyzeAudio(audioPath){
   return new Promise((resolve)=>{
     const ff = spawn(ffmpegPath, ["-i", audioPath, "-af", "silencedetect=noise=-30dB:d=0.7", "-f", "null", "-"]);
     let err = ""; ff.stderr.on("data", d=>{ err += d.toString(); });
-    ff.on("error", ()=>resolve([]));
+    ff.on("error", ()=>resolve({ duration:null, silences:[] }));
     ff.on("close", ()=>{
+      let duration=null;
+      const dm = err.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+      if(dm) duration = (+dm[1])*3600 + (+dm[2])*60 + parseFloat(dm[3]);
       const sil=[]; let curStart=null;
       for(const line of err.split("\n")){
-        const ms = line.match(/silence_start:\s*([0-9.]+)/);
+        const ms = line.match(/silence_start:\s*(-?[0-9.]+)/);
         const me = line.match(/silence_end:\s*([0-9.]+)/);
-        if(ms) curStart = parseFloat(ms[1]);
+        if(ms) curStart = Math.max(0, parseFloat(ms[1]));
         else if(me && curStart!==null){ sil.push({ start:curStart, end:parseFloat(me[1]) }); curStart=null; }
       }
-      if(curStart!==null) sil.push({ start:curStart, end:1e9 });
-      resolve(sil);
+      if(curStart!==null && duration) sil.push({ start:curStart, end:duration });
+      resolve({ duration, silences:sil });
     });
   });
 }
@@ -133,10 +136,8 @@ function extractSlice(audioPath, start, dur, outPath){
     ff.on("close", c=> c===0 ? resolve() : reject(new Error("ffmpeg slice " + c)));
   });
 }
-async function recoverGaps(audioPath, duration, words, segments){
-  let silences=[];
-  try { silences = await detectSilences(audioPath); } catch(_){ return { words, segments, recovered:0 }; }
-  const gaps = findGaps(words, silences, duration||0, 1.2).slice(0, 15);
+async function recoverGaps(audioPath, duration, silences, words, segments){
+  const gaps = findGaps(words, silences, duration||0, 1.0).slice(0, 25);
   if(gaps.length===0) return { words, segments, recovered:0 };
   let addedWords=[], addedSegs=[], recovered=0;
   for(const g of gaps){
@@ -150,19 +151,42 @@ async function recoverGaps(audioPath, duration, words, segments){
       const v = await whisperVerbose(slice);
       try { fs.unlinkSync(slice); } catch(_){}
       if(!(v.text||"").trim()) continue;
-      const ws=(Array.isArray(v.words)?v.words:[]).map(w=>({ word:w.word, start:(w.start||0)+start, end:(w.end||0)+start }));
-      const ss=(Array.isArray(v.segments)?v.segments:[]).map(s=>({ start:(s.start||0)+start, end:(s.end||0)+start, text:(s.text||"").trim() }));
-      const kw=ws.filter(w=> w.start>=g.start-0.15 && w.start<=g.end+0.15);
+      // tieni SOLO le parole che cadono dentro il buco (niente sconfinamenti = niente sovrapposizioni)
+      const kw=(Array.isArray(v.words)?v.words:[])
+        .map(w=>({ word:w.word, start:(w.start||0)+start, end:(w.end||0)+start }))
+        .filter(w=> w.start>=g.start-0.05 && w.end<=g.end+0.15);
       if(kw.length===0) continue;
       addedWords=addedWords.concat(kw);
-      addedSegs=addedSegs.concat(ss.filter(s=> s.start>=g.start-0.3 && s.start<=g.end+0.3 && s.text));
+      addedSegs.push({ start:kw[0].start, end:kw[kw.length-1].end, text:kw.map(w=>w.word).join(" ") });
       recovered++;
     }catch(_){ try{ fs.unlinkSync(slice); }catch(__){} }
   }
   if(recovered===0) return { words, segments, recovered:0 };
-  const allWords = words.concat(addedWords).sort((a,b)=>(a.start||0)-(b.start||0));
-  const allSegs = segments.concat(addedSegs).sort((a,b)=>(a.start||0)-(b.start||0)).map((s,i)=>({ id:i, start:s.start, end:s.end, text:s.text }));
-  return { words: allWords, segments: allSegs, recovered };
+  return { words: words.concat(addedWords), segments: segments.concat(addedSegs), recovered };
+}
+
+// garantisce: parole senza duplicati/sovrapposizioni, segmenti senza sovrapposizioni, tempi entro la durata
+function cleanTranscript(words, segments, duration){
+  const D = duration || null;
+  const ws=(words||[]).filter(w=> typeof w.start==="number" && typeof w.end==="number" && w.end>w.start).sort((a,b)=>a.start-b.start);
+  const cw=[];
+  for(const w of ws){
+    const last=cw[cw.length-1];
+    if(last && w.start < last.end - 0.06) continue; // sovrapposizione = parola duplicata: la scarto
+    cw.push({ word:w.word, start:w.start, end:(D? Math.min(w.end,D) : w.end) });
+  }
+  const ss=(segments||[]).filter(s=> typeof s.start==="number" && typeof s.end==="number" && s.end>s.start).sort((a,b)=>a.start-b.start);
+  const cs=[];
+  for(const s of ss){
+    let start=s.start, end=(D? Math.min(s.end,D) : s.end);
+    const last=cs[cs.length-1];
+    if(last && start < last.end) start=last.end;   // niente sovrapposizioni tra frasi
+    if(end - start < 0.05) continue;
+    cs.push({ start, end, text:(s.text||"").trim() });
+  }
+  cs.forEach((s,i)=>{ s.id=i; });
+  const text=cs.map(s=>s.text).join(" ").replace(/\s+/g," ").trim();
+  return { words:cw, segments:cs, text };
 }
 
 // ---------- R2 ----------
@@ -215,23 +239,30 @@ exports.handler = async (event) => {
     if(sizeMB > 24.5) throw new Error("Audio troppo lungo per la trascrizione (oltre ~24 MB, ~50 min).");
 
     const v = await whisperVerbose(aud);
-    let text = (v.text || "").trim();
-    if(!text) throw new Error("Trascrizione vuota.");
+    if(!(v.text || "").trim()) throw new Error("Trascrizione vuota.");
     let words = (Array.isArray(v.words)?v.words:[]).map(function(w){ return { word:w.word, start:w.start, end:w.end }; });
     let segments = (Array.isArray(v.segments)?v.segments:[]).map(function(s){ return { id:s.id, start:s.start, end:s.end, text:(s.text||"").trim() }; });
-    const duration = v.duration || (words.length ? words[words.length-1].end : null);
 
-    // recupero del parlato eventualmente saltato da Whisper
+    // durata REALE dell'audio + mappa dei silenzi (una sola passata FFmpeg)
+    const audioMap = await analyzeAudio(aud);
+    const duration = audioMap.duration || v.duration || (words.length ? words[words.length-1].end : null);
+    console.log("Durata audio: " + (duration? duration.toFixed(1)+"s" : "?") + " · silenzi rilevati: " + audioMap.silences.length);
+
+    // recupero del parlato eventualmente saltato da Whisper (buchi con voce ma senza testo)
     let recovered = 0;
     try {
       console.log("Cerco parlato eventualmente saltato...");
-      const r = await recoverGaps(aud, duration, words, segments);
+      const r = await recoverGaps(aud, duration, audioMap.silences, words, segments);
       words = r.words; segments = r.segments; recovered = r.recovered;
-      if(recovered>0){ text = segments.map(s=>s.text).join(" ").replace(/\s+/g," ").trim(); console.log("Recuperati " + recovered + " pezzi di parlato mancante."); }
-      else console.log("Nessun pezzo mancante rilevato.");
+      console.log(recovered>0 ? ("Recuperati " + recovered + " pezzi di parlato mancante.") : "Nessun pezzo mancante rilevato.");
     } catch(e){ console.log("Recupero saltato:", String((e&&e.message)||e).slice(0,120)); }
 
     try { fs.unlinkSync(aud); } catch(_){}
+
+    // pulizia finale: niente sovrapposizioni, niente parole duplicate, tempi entro la durata
+    const cleaned = cleanTranscript(words, segments, duration);
+    words = cleaned.words; segments = cleaned.segments;
+    const text = cleaned.text;
 
     const transcriptObj = {
       version: 2,
