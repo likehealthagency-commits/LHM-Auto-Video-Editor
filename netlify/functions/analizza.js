@@ -163,6 +163,14 @@ exports.handler = async (event) => {
       await r2PutJson("analyses/"+id+".json", a);
       return ok({analysis:a});
     }
+    // salva un EDL modificato a mano (trascinamento bordi nell'editor)
+    if(p.setKeep){
+      const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
+      a.keep=(Array.isArray(p.setKeep)?p.setKeep:[]).map(iv=>({start:+iv.start,end:+iv.end})).filter(iv=> iv.end>iv.start+0.02).sort((x,y)=>x.start-y.start);
+      a.manualKeep=true;
+      await r2PutJson("analyses/"+id+".json", a);
+      return ok({analysis:a});
+    }
     const existing=await r2GetJson("analyses/"+id+".json");
     if(p.peek) return ok({analysis:existing});
     if(existing && !p.force) return ok({analysis:existing});
