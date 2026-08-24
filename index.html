@@ -104,6 +104,15 @@
   .tl{position:relative;height:46px;background:#20242B;border-radius:8px;overflow:hidden;cursor:pointer;margin-top:14px}
   .tl .k{position:absolute;top:0;bottom:0;background:linear-gradient(180deg,#6E8BF5,var(--accent))}
   .tl .ph{position:absolute;top:-2px;bottom:-2px;width:2px;background:#fff;box-shadow:0 0 6px rgba(255,255,255,.9)}
+  .tl .k .h{position:absolute;top:0;bottom:0;width:9px;background:rgba(255,255,255,.55);cursor:ew-resize}
+  .tl .k .h:hover{background:rgba(255,255,255,.95)}
+  .tl .k .h.l{left:0} .tl .k .h.r{right:0}
+  .tlhint{font-size:12px;color:var(--muted);margin-top:8px}
+  .edpanel{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+  .edpanel label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .tinput{font-family:"IBM Plex Mono";font-size:13px;width:104px;padding:6px 8px;border:1px solid var(--line);border-radius:7px}
+  .tinput:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+  .tl .k.sel{outline:2px solid #fff;outline-offset:-1px}
   .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:8px}
   .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
 </style>
@@ -348,6 +357,8 @@ function ProjectList({onOpen}){
   );
 }
 
+function fmtMs(sec){ sec=Math.max(0,sec||0); const m=Math.floor(sec/60), ss=Math.floor(sec%60), ms=Math.floor((sec-Math.floor(sec))*1000); return m+":"+String(ss).padStart(2,"0")+"."+String(ms).padStart(3,"0"); }
+
 function Editor({driveFileId,name,onBack}){
   const [analysis,setAnalysis]=useState(null);
   const [hlsUrl,setHlsUrl]=useState(null);
@@ -355,7 +366,13 @@ function Editor({driveFileId,name,onBack}){
   const [err,setErr]=useState("");
   const [playing,setPlaying]=useState(false);
   const [t,setT]=useState(0); const [dur,setDur]=useState(0);
+  const [skipCuts,setSkipCuts]=useState(true);
+  const [editKeep,setEditKeep]=useState([]);
+  const [drag,setDrag]=useState(null);
+  const [selected,setSelected]=useState(null); const [startStr,setStartStr]=useState(""); const [endStr,setEndStr]=useState("");
   const videoRef=useRef(null); const pollRef=useRef(null); const hlsInst=useRef(null);
+  const timelineRef=useRef(null); const editKeepRef=useRef([]);
+  editKeepRef.current=editKeep;
 
   useEffect(()=>{ init(); return ()=>{ if(pollRef.current) clearInterval(pollRef.current); if(hlsInst.current){ hlsInst.current.destroy(); hlsInst.current=null; } }; },[driveFileId]);
   async function init(){
@@ -375,6 +392,14 @@ function Editor({driveFileId,name,onBack}){
     }catch(_){}
     if(n>120){ clearInterval(pollRef.current); pollRef.current=null; setErr("La preparazione sta impiegando troppo. Riprova tra poco."); setPhase("error"); } },5000); }
 
+  async function retry(){
+    try{ await streamApi("reset",driveFileId); }catch(_){}
+    streamTriggered.delete(driveFileId);
+    setErr(""); setHlsUrl(null); setPhase("loading"); init();
+  }
+
+  useEffect(()=>{ if(analysis && Array.isArray(analysis.keep)) setEditKeep(analysis.keep.map(x=>({start:x.start,end:x.end}))); },[analysis]);
+
   useEffect(()=>{
     if(phase!=="ready" || !hlsUrl) return;
     const v=videoRef.current; if(!v) return;
@@ -384,29 +409,56 @@ function Editor({driveFileId,name,onBack}){
     return ()=>{ if(hlsInst.current){ hlsInst.current.destroy(); hlsInst.current=null; } };
   },[phase,hlsUrl]);
 
-  async function retry(){
-    try{ await streamApi("reset",driveFileId); }catch(_){}
-    streamTriggered.delete(driveFileId);
-    setErr(""); setHlsUrl(null); setPhase("loading"); init();
-  }
-
-  const keep=(analysis&&analysis.keep)||[];
   const totalDur=dur||(analysis&&analysis.duration)||0;
-  const keptDur=keep.reduce((s,k)=>s+(k.end-k.start),0);
-  function inKeep(time){ return keep.some(k=>time>=k.start-0.05 && time<k.end-0.02); }
-  function nextKeepStart(time){ const f=keep.find(k=>k.start>time-0.02); return f?f.start:null; }
+  const keptDur=editKeep.reduce((s,k)=>s+(k.end-k.start),0);
+  function inKeep(time){ return editKeep.some(k=>time>=k.start-0.05 && time<k.end-0.02); }
+  function nextKeepStart(time){ const f=editKeep.find(k=>k.start>time-0.02); return f?f.start:null; }
+  function pc(x){ return totalDur? (Math.max(0,Math.min(100,x/totalDur*100))+"%") : "0%"; }
+
   function onTime(){ const v=videoRef.current; if(!v) return; const time=v.currentTime; setT(time);
-    if(keep.length && !inKeep(time)){ const ns=nextKeepStart(time); if(ns!==null && ns>time){ v.currentTime=ns; } else { v.pause(); setPlaying(false); } } }
+    if(skipCuts && editKeep.length && !inKeep(time)){ const ns=nextKeepStart(time); if(ns!==null && ns>time){ v.currentTime=ns; } else { v.pause(); setPlaying(false); } } }
   function togglePlay(){ const v=videoRef.current; if(!v) return;
-    if(v.paused){ if(keep.length && !inKeep(v.currentTime)){ const ns=nextKeepStart(v.currentTime); v.currentTime=(ns!==null?ns:(keep.length?keep[0].start:0)); } v.play(); setPlaying(true); }
+    if(v.paused){ if(skipCuts && editKeep.length && !inKeep(v.currentTime)){ const ns=nextKeepStart(v.currentTime); v.currentTime=(ns!==null?ns:(editKeep.length?editKeep[0].start:0)); } v.play(); setPlaying(true); }
     else { v.pause(); setPlaying(false); } }
-  function seekAt(e){ const v=videoRef.current; if(!v||!totalDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; let time=Math.max(0,Math.min(totalDur,p*totalDur)); if(keep.length && !inKeep(time)){ const ns=nextKeepStart(time); if(ns!==null) time=ns; } v.currentTime=time; setT(time); }
+  function seekAt(e){ const v=videoRef.current; if(!v||!totalDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; const time=Math.max(0,Math.min(totalDur,p*totalDur)); v.currentTime=time; setT(time); }
+
+  function saveKeep(keep){ try{ analyzeApi({driveFileId,setKeep:keep}); }catch(_){} }
+  useEffect(()=>{
+    if(!drag) return;
+    function move(e){
+      if(!timelineRef.current) return;
+      const rect=timelineRef.current.getBoundingClientRect();
+      const time=Math.max(0,Math.min(totalDur,((e.clientX-rect.left)/rect.width)*totalDur));
+      setEditKeep(prev=>{
+        const arr=prev.map(x=>({...x})); const iv=arr[drag.idx]; if(!iv) return prev; const MIN=0.1;
+        if(drag.edge==="left"){ const lo=drag.idx>0?arr[drag.idx-1].end+0.02:0; iv.start=Math.max(lo,Math.min(time,iv.end-MIN)); }
+        else { const hi=drag.idx<arr.length-1?arr[drag.idx+1].start-0.02:totalDur; iv.end=Math.min(hi,Math.max(time,iv.start+MIN)); }
+        return arr;
+      });
+    }
+    function up(){ setDrag(null); saveKeep(editKeepRef.current); }
+    window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+    return ()=>{ window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",up); };
+  },[drag,totalDur]);
+
+  useEffect(()=>{ if(selected!=null){ const iv=editKeepRef.current[selected]; if(iv){ setStartStr(fmtMs(iv.start)); setEndStr(fmtMs(iv.end)); } } },[selected]);
+  function parseTime(str){ str=String(str).trim(); if(str.indexOf(":")>=0){ const parts=str.split(":"); return (parseFloat(parts[0])||0)*60 + (parseFloat(parts[1])||0); } return parseFloat(str); }
+  function selectInterval(i){ setSelected(i); const iv=editKeepRef.current[i]; const v=videoRef.current; if(iv&&v){ v.currentTime=iv.start; setT(iv.start); } }
+  function applyEdit(){
+    const ns=parseTime(startStr), ne=parseTime(endStr);
+    if(isNaN(ns)||isNaN(ne)||ne<=ns){ setErr("Tempi non validi: usa minuti:secondi.millesimi, es. 1:07.500"); return; }
+    setErr("");
+    setEditKeep(prev=>{ const arr=prev.map(x=>({...x})); const iv=arr[selected]; if(!iv) return prev;
+      const lo=selected>0?arr[selected-1].end+0.02:0; const hi=selected<arr.length-1?arr[selected+1].start-0.02:totalDur;
+      iv.start=Math.max(lo,Math.min(ns,ne-0.1)); iv.end=Math.min(hi,Math.max(ne,iv.start+0.1)); saveKeep(arr); return arr; });
+  }
+  function delInterval(){ setEditKeep(prev=>{ const arr=prev.filter((_,i)=>i!==selected); saveKeep(arr); return arr; }); setSelected(null); }
 
   return (
     <div className="wrap">
       <div className="top">
         <span className="brand"><b>LHM</b> Video Editor</span>
-        <span className="crumb" onClick={onBack}>‹ Torna</span><span className="muted">/</span>
+        <span className="crumb" onClick={onBack}>‹ Torna a tagli e script</span><span className="muted">/</span>
         <h1>Anteprima montaggio</h1>
       </div>
       <div style={{fontSize:14,color:"var(--muted)",marginBottom:14}}>{name||driveFileId}</div>
@@ -419,15 +471,32 @@ function Editor({driveFileId,name,onBack}){
           <div className="vwrap"><video ref={videoRef} playsInline onLoadedMetadata={e=>setDur(e.currentTarget.duration||0)} onTimeUpdate={onTime} onEnded={()=>setPlaying(false)} /></div>
           <div className="ctrls">
             <button className="btn pri" onClick={togglePlay}>{playing?"Pausa":"Play"}</button>
-            <span className="time">{fmtTC(t)} / {fmtTC(totalDur)}</span>
+            <span className="time">{fmtMs(t)} / {fmtMs(totalDur)}</span>
+            <button className={"btn sm"+(skipCuts?" pri":"")} title="Se attivo, la riproduzione salta le parti tagliate" onClick={()=>setSkipCuts(v=>!v)}>{skipCuts?"Salta i tagli ✓":"Mostra anche i tagli"}</button>
             <span className="grow"></span>
-            <span className="time">Durata montata: {fmtTC(keptDur)}</span>
+            <span className="time">Montato: {fmtMs(keptDur)}</span>
           </div>
-          {totalDur>0 && <div className="tl" onClick={seekAt}>
-            {keep.map((k,i)=>(<div key={i} className="k" style={{left:(k.start/totalDur*100)+"%",width:((k.end-k.start)/totalDur*100)+"%"}}></div>))}
-            <div className="ph" style={{left:(t/totalDur*100)+"%"}}></div>
+          {totalDur>0 && <div className="tl" ref={timelineRef} onClick={seekAt}>
+            {editKeep.map((k,i)=>(
+              <div key={i} className={"k"+(selected===i?" sel":"")} style={{left:pc(k.start),width:pc(k.end-k.start)}} onClick={(e)=>{e.stopPropagation(); selectInterval(i);}}>
+                <div className="h l" onMouseDown={(e)=>{e.stopPropagation(); setDrag({idx:i,edge:"left"});}} onClick={(e)=>e.stopPropagation()}></div>
+                <div className="h r" onMouseDown={(e)=>{e.stopPropagation(); setDrag({idx:i,edge:"right"});}} onClick={(e)=>e.stopPropagation()}></div>
+              </div>
+            ))}
+            <div className="ph" style={{left:pc(t)}}></div>
           </div>}
-          <div className="legend"><span><i style={{background:"var(--accent)"}}></i>Tenuto (si vede)</span><span><i style={{background:"#20242B"}}></i>Tagliato (saltato)</span></div>
+          <div className="tlhint">Trascina i bordi delle zone blu per spostare i tagli. Clicca sul nero (o attiva “Mostra anche i tagli”) per ispezionare cosa è stato tolto.</div>
+          {selected!=null && editKeep[selected] && (
+            <div className="edpanel">
+              <span className="mono" style={{fontWeight:600}}>Zona {selected+1}</span>
+              <label>Inizio <input className="tinput" value={startStr} onChange={e=>setStartStr(e.target.value)} /></label>
+              <label>Fine <input className="tinput" value={endStr} onChange={e=>setEndStr(e.target.value)} /></label>
+              <button className="btn sm pri" onClick={applyEdit}>Applica</button>
+              <button className="btn sm ghost danger" onClick={delInterval}>Elimina zona</button>
+              <button className="btn sm ghost" onClick={()=>setSelected(null)}>Chiudi</button>
+            </div>
+          )}
+          <div className="legend"><span><i style={{background:"var(--accent)"}}></i>Tenuto</span><span><i style={{background:"#20242B"}}></i>Tagliato</span></div>
         </div>
       )}
     </div>
