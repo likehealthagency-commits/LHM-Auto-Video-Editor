@@ -131,6 +131,7 @@
   .forcebox{margin-top:18px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:#FAFBFC}
   .forcerow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
   .forcemsg{margin-top:8px;font-size:13px;color:var(--accent-ink)}
+  .covinfo{margin-top:8px;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .tl .k.sel{outline:2px solid #fff;outline-offset:-1px}
   .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:8px}
   .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
@@ -279,6 +280,14 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
       </div>
       <div className="forcebox">
         <div className="lbl">Manca un pezzo? Forza la trascrizione di un intervallo</div>
+        {data.coverage && <div className="covinfo">
+          {data.coverage.holesAfter>0.4
+            ? <span>Il sistema segnala <b>~{data.coverage.holesAfter}s</b> di parlato ancora scoperto{data.coverage.holes&&data.coverage.holes.length>0?" nelle zone:":"."}</span>
+            : <span>Copertura del parlato: <b>completa</b> (nessuna zona scoperta rilevata).</span>}
+          {data.coverage.holes && data.coverage.holes.map((h,i)=>(
+            <button key={i} className="btn sm ghost" title="Clicca per forzare questa zona" onClick={()=>{ setFStart(fmtTC(h.start)); setFEnd(fmtTC(Math.ceil(h.end))); }}>{fmtTC(h.start)}–{fmtTC(h.end)}</button>
+          ))}
+        </div>}
         <div className="forcerow">
           <label>Da <input className="tinput" placeholder="m:ss" value={fStart} onChange={e=>setFStart(e.target.value)} /></label>
           <label>A <input className="tinput" placeholder="m:ss" value={fEnd} onChange={e=>setFEnd(e.target.value)} /></label>
