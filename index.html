@@ -12,141 +12,160 @@
     --bg:#EBEDF0; --surface:#FFFFFF; --ink:#161A20; --muted:#6A7280; --line:#E1E4E9;
     --accent:#2F54EB; --accent-ink:#1D39C4; --accent-wash:#EEF1FE;
     --queued:#8A94A6; --working:#D98A1F; --ready:#1F9D66; --error:#E5484D;
+    --keep:#1F9D66; --discard:#E5484D;
     --radius:12px; --shadow:0 1px 2px rgba(20,24,32,.04),0 8px 24px rgba(20,24,32,.06);
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
   .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
-  a{color:inherit}
   .wrap{max-width:860px;margin:0 auto;padding:28px 20px 80px}
-  /* header */
-  .top{display:flex;align-items:baseline;gap:12px;margin:6px 0 26px;border-bottom:1px solid var(--line);padding-bottom:18px}
+  .top{display:flex;align-items:baseline;gap:12px;margin:6px 0 26px;border-bottom:1px solid var(--line);padding-bottom:18px;flex-wrap:wrap}
   .brand{font-family:"IBM Plex Mono";font-weight:600;letter-spacing:.04em;font-size:13px;text-transform:uppercase;color:var(--accent-ink)}
   .brand b{color:var(--ink)}
   .top h1{font-size:20px;font-weight:600;margin:0}
-  .crumb{font-size:13px;color:var(--muted);cursor:pointer}
-  .crumb:hover{color:var(--ink)}
-  /* buttons */
+  .crumb{font-size:13px;color:var(--muted);cursor:pointer}.crumb:hover{color:var(--ink)}
+  .grow{flex:1}
   .btn{font-family:inherit;font-size:14px;font-weight:500;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:9px 15px;border-radius:9px;cursor:pointer;transition:.12s}
-  .btn:hover{border-color:#C9CED6}
-  .btn:disabled{opacity:.5;cursor:default}
-  .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
-  .btn.pri:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
-  .btn.ghost{border-color:transparent;background:transparent;color:var(--muted);padding:6px 8px}
-  .btn.ghost:hover{color:var(--ink);background:#0000000a}
+  .btn:hover{border-color:#C9CED6}.btn:disabled{opacity:.5;cursor:default}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}.btn.pri:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--muted);padding:6px 8px}.btn.ghost:hover{color:var(--ink);background:#0000000a}
   .btn.sm{padding:6px 10px;font-size:13px}
-  .btn.danger:hover{color:var(--error);border-color:#F3C6C7}
-  /* inputs */
+  .btn.danger{color:var(--error)}.btn.danger:hover{border-color:#F3C6C7;background:#fdecec}
   .field{width:100%;font-family:inherit;font-size:14px;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink)}
   .field:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
-  .row{display:flex;gap:10px}
-  /* project list */
   .stack{display:flex;flex-direction:column;gap:10px}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
-  .pcard{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;cursor:pointer;transition:.12s}
-  .pcard:hover{border-color:#C9CED6;transform:translateY(-1px)}
+  .pcard{display:flex;align-items:center;gap:14px;padding:16px 18px;transition:.12s}
+  .pcard .body{flex:1;cursor:pointer}.pcard:hover{border-color:#C9CED6;transform:translateY(-1px)}
   .pcard h3{margin:0;font-size:16px;font-weight:600}
-  .pcard .meta{font-size:12.5px;color:var(--muted);margin-top:3px}
-  .pcard .chev{color:var(--muted);font-size:18px}
-  /* new project inline */
+  .pcard .meta{font-size:12.5px;color:var(--muted);margin-top:3px;display:flex;gap:8px;align-items:center}
+  .pill{font-family:"IBM Plex Mono";font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:20px;background:#f0f2f5;color:var(--muted)}
+  .pill.ok{background:#1f9d6614;color:var(--ready)}
+  .pcard .chev{color:var(--muted);font-size:20px;cursor:pointer}
   .newbar{display:flex;gap:10px;margin-bottom:22px}
-  /* raw / take list */
   .seq{position:relative;margin-left:6px;padding-left:26px}
-  .seq:before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:2px;background:linear-gradient(var(--line),var(--line))}
+  .seq:before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:2px;background:var(--line)}
   .take{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 16px;margin-bottom:12px}
   .take:before{content:"";position:absolute;left:-21px;top:22px;width:9px;height:9px;border-radius:50%;background:var(--surface);border:2px solid var(--accent)}
   .take .head{display:flex;align-items:center;gap:12px}
   .num{font-family:"IBM Plex Mono";font-weight:600;font-size:13px;color:var(--accent-ink);background:var(--accent-wash);border-radius:6px;padding:3px 8px;min-width:34px;text-align:center}
-  .take .id{font-family:"IBM Plex Mono";font-size:12.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .take .title{flex:1;min-width:0}
+  .take .title .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .take .title .id{font-family:"IBM Plex Mono";font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .take .arrows{display:flex;flex-direction:column;gap:1px}
   .take .arrows button{border:none;background:transparent;color:var(--muted);cursor:pointer;line-height:.8;font-size:12px;padding:2px 4px;border-radius:4px}
-  .take .arrows button:hover{color:var(--ink);background:#0000000a}
-  .take .arrows button:disabled{opacity:.3;cursor:default}
+  .take .arrows button:hover{color:var(--ink);background:#0000000a}.take .arrows button:disabled{opacity:.3;cursor:default}
   .actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
-  /* status chip */
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;padding:4px 9px;border-radius:20px}
   .chip .dot{width:7px;height:7px;border-radius:50%}
-  .chip.queued{color:var(--queued);background:#8a94a615}
-  .chip.working{color:var(--working);background:#d98a1f15}
-  .chip.ready{color:var(--ready);background:#1f9d6615}
-  .chip.error{color:var(--error);background:#e5484d15}
-  .chip.queued .dot{background:var(--queued)} .chip.working .dot{background:var(--working)}
-  .chip.ready .dot{background:var(--ready)} .chip.error .dot{background:var(--error)}
-  .chip.working .dot{animation:pulse 1s infinite}
+  .chip.queued{color:var(--queued);background:#8a94a615}.chip.working{color:var(--working);background:#d98a1f15}
+  .chip.ready{color:var(--ready);background:#1f9d6615}.chip.error{color:var(--error);background:#e5484d15}
+  .chip.queued .dot{background:var(--queued)}.chip.working .dot{background:var(--working);animation:pulse 1s infinite}
+  .chip.ready .dot{background:var(--ready)}.chip.error .dot{background:var(--error)}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-  /* progress bar */
   .bar{height:7px;background:#EEF0F3;border-radius:20px;overflow:hidden;margin-top:12px}
   .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#5B7BF0);border-radius:20px;transition:width .6s ease}
-  .barlabel{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:6px}
-  .barlabel .mono{color:var(--accent-ink)}
-  /* transcript preview */
+  .barlabel{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:6px}.barlabel .mono{color:var(--accent-ink)}
   .tx{margin-top:12px;border-top:1px dashed var(--line);padding-top:12px}
   .tx p{margin:0 0 8px;font-size:14px;color:#2A2F38;max-height:120px;overflow:auto}
   .tx .stat{font-size:12px;color:var(--muted)}
-  /* empty / error */
+  /* analisi / tagli */
+  .analysis{margin-top:14px;border-top:1px solid var(--line);padding-top:14px}
+  .asum{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .asum .t{font-weight:600;font-size:14px}
+  .tag{font-family:"IBM Plex Mono";font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:20px}
+  .tag.keep{background:#1f9d6614;color:var(--keep)} .tag.discard{background:#e5484d14;color:var(--discard)}
+  .scriptbox{background:#F7F8FA;border:1px solid var(--line);border-radius:9px;padding:12px 13px;font-size:14px;color:#22262E;max-height:150px;overflow:auto;white-space:pre-wrap}
+  .lbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px}
+  .cut{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #EEF0F3}
+  .cut:last-child{border-bottom:none}
+  .cut .tc{font-family:"IBM Plex Mono";font-size:12px;color:var(--muted);min-width:96px;flex-shrink:0;padding-top:1px}
+  .cut .bd{flex:1;min-width:0}
+  .cut .txt{font-size:13.5px}
+  .cut .rs{font-size:12px;color:var(--muted);margin-top:2px}
+  .cut.discard .txt{color:#9AA1AC;text-decoration:line-through}
+  .cut .mk{font-family:"IBM Plex Mono";font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:5px;height:fit-content;margin-top:1px}
+  .cut.keep .mk{background:#1f9d6614;color:var(--keep)} .cut.discard .mk{background:#e5484d14;color:var(--discard)}
   .empty{text-align:center;padding:54px 20px;color:var(--muted)}
   .empty h3{color:var(--ink);font-weight:600;margin:0 0 6px;font-size:17px}
   .banner{background:#FDECEC;border:1px solid #F3C6C7;color:#A32B2E;padding:11px 14px;border-radius:9px;font-size:13.5px;margin-bottom:16px}
   .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
   @keyframes sp{to{transform:rotate(360deg)}}
-  .muted{color:var(--muted)} .center{text-align:center}
+  .muted{color:var(--muted)}
+  .renamebar{display:flex;gap:8px;align-items:center;flex:1}
 </style>
 </head>
 <body>
 <div id="root"></div>
-
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
-const API = "/.netlify/functions/progetti";
-const TRANSCRIBE = "/.netlify/functions/trascrivi-grezzo-background";
-const EST_MS = 150000; // stima ~2.5 min per la barra
+const API="/.netlify/functions/progetti";
+const TRANSCRIBE="/.netlify/functions/trascrivi-grezzo-background";
+const ANALYZE="/.netlify/functions/analizza";
+const EST_MS=150000;
 
-async function api(action, extra){
-  const res = await fetch(API, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(Object.assign({action}, extra||{})) });
-  const data = await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(data.error || ("Errore "+res.status));
-  return data;
+async function api(action,extra){
+  const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({action},extra||{}))});
+  const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||("Errore "+res.status)); return data;
+}
+async function analyzeApi(body){
+  const res=await fetch(ANALYZE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||("Errore "+res.status)); return data;
 }
 function fmtDate(iso){ try{ return new Date(iso).toLocaleDateString("it-IT",{day:"numeric",month:"short",year:"numeric"});}catch(_){return "";} }
+function fmtTC(sec){ sec=Math.max(0,Math.round(sec||0)); const m=Math.floor(sec/60), s=sec%60; return m+":"+String(s).padStart(2,"0"); }
 function ordered(raws){ return (raws||[]).slice().sort((a,b)=>(a.order||0)-(b.order||0)); }
 
-// ---------- Chip di stato ----------
 function Chip({status}){
-  const label = {queued:"In attesa", working:"Trascrizione in corso", ready:"Trascritto", error:"Errore"}[status] || status;
+  const label={queued:"In attesa",working:"Trascrizione in corso",ready:"Trascritto",error:"Errore"}[status]||status;
   return <span className={"chip "+status}><span className="dot"></span>{label}</span>;
 }
-
-// ---------- Barra di avanzamento ----------
 function Progress({startedAt}){
-  const [pct,setPct] = useState(2);
-  useEffect(()=>{
-    const t = setInterval(()=>{
-      const el = Date.now() - startedAt;
-      const p = Math.min(95, Math.round((el/EST_MS)*100));
-      setPct(p<2?2:p);
-    }, 800);
-    return ()=>clearInterval(t);
-  },[startedAt]);
+  const [pct,setPct]=useState(2);
+  useEffect(()=>{ const t=setInterval(()=>{const el=Date.now()-startedAt;const p=Math.min(95,Math.round((el/EST_MS)*100));setPct(p<2?2:p);},800); return ()=>clearInterval(t); },[startedAt]);
+  return <div><div className="bar"><i style={{width:pct+"%"}}></i></div><div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div></div>;
+}
+
+function Analysis({data}){
+  const [copied,setCopied]=useState(false);
+  function copy(){ try{ navigator.clipboard.writeText(data.cleanScript); setCopied(true); setTimeout(()=>setCopied(false),1500);}catch(_){}}
   return (
-    <div>
-      <div className="bar"><i style={{width:pct+"%"}}></i></div>
-      <div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div>
+    <div className="analysis">
+      <div className="asum">
+        <span className="t">Proposta di montaggio</span>
+        <span className="tag keep">{data.stats.kept} da tenere</span>
+        <span className="tag discard">{data.stats.discarded} da tagliare</span>
+      </div>
+      <div className="lbl">Script pulito</div>
+      <div className="scriptbox">{data.cleanScript}</div>
+      <div style={{marginTop:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button></div>
+      <div className="lbl">Lista tagli</div>
+      <div>
+        {data.decisions.map(d=>(
+          <div key={d.i} className={"cut "+d.action}>
+            <div className="tc">{fmtTC(d.start)} – {fmtTC(d.end)}</div>
+            <div className="bd">
+              <div className="txt">{d.text}</div>
+              {d.reason && <div className="rs">{d.reason}</div>}
+            </div>
+            <div className="mk">{d.action==="keep"?"TIENI":"TAGLIA"}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-// ---------- Una "take" (grezzo) ----------
-function Take({raw, index, total, onMove, onDelete, onTranscribe, live}){
-  const status = live.status || raw.status || "queued";
+function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,live}){
+  const status=live.status||raw.status||"queued";
   return (
     <div className="take">
       <div className="head">
         <span className="num">{String(index+1).padStart(2,"0")}</span>
-        <span className="id mono" title={raw.link||raw.driveFileId}>{raw.driveFileId}</span>
+        <div className="title"><div className="nm">{raw.name||"Video senza nome"}</div><div className="id" title={raw.link||raw.driveFileId}>{raw.driveFileId}</div></div>
         <div className="arrows">
           <button onClick={()=>onMove(raw,"up")} disabled={index===0} title="Sposta su">▲</button>
           <button onClick={()=>onMove(raw,"down")} disabled={index===total-1} title="Sposta giù">▼</button>
@@ -156,193 +175,133 @@ function Take({raw, index, total, onMove, onDelete, onTranscribe, live}){
         <Chip status={status} />
         {status!=="working" && <button className="btn sm pri" onClick={()=>onTranscribe(raw)}>{status==="ready"?"Ritrascrivi":"Trascrivi"}</button>}
         {status==="ready" && <button className="btn sm" onClick={()=>live.onView(raw)}>Vedi trascrizione</button>}
+        {status==="ready" && <button className="btn sm" onClick={()=>onAnalyze(raw)} disabled={live.analyzing}>{live.analyzing?<span className="spin"></span>:(live.analysis?"Rianalizza tagli":"Trova i tagli")}</button>}
         <button className="btn sm ghost danger" onClick={()=>onDelete(raw)}>Rimuovi</button>
       </div>
       {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
-      {live.tx && (
-        <div className="tx">
-          <p>{live.tx.text}</p>
-          <div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div>
-        </div>
-      )}
+      {live.tx && (<div className="tx"><p>{live.tx.text}</p><div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div></div>)}
+      {live.analyzing && !live.analysis && <div style={{marginTop:12,color:"var(--muted)",fontSize:13}}><span className="spin"></span> Il cervello sta leggendo la trascrizione…</div>}
+      {live.analysis && <Analysis data={live.analysis} />}
       {status==="error" && live.error && <div className="banner" style={{marginTop:10,marginBottom:0}}>{live.error}</div>}
     </div>
   );
 }
 
-// ---------- Schermata progetto ----------
-function ProjectView({projectId, onBack}){
-  const [project,setProject] = useState(null);
-  const [link,setLink] = useState("");
-  const [err,setErr] = useState("");
-  const [busy,setBusy] = useState(false);
-  const [live,setLive] = useState({}); // rawId -> {status,startedAt,tx,error,onView}
-  const pollRef = useRef(null);
+function ProjectView({projectId,onBack,onDeleted}){
+  const [project,setProject]=useState(null);
+  const [link,setLink]=useState(""); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
+  const [live,setLive]=useState({}); const pollRef=useRef(null);
+  const [editing,setEditing]=useState(false); const [tempName,setTempName]=useState("");
 
-  async function load(){
-    try{ const d = await api("get",{projectId}); setProject(d.project); await refreshStatuses(d.project); }
-    catch(e){ setErr(e.message); }
-  }
+  async function load(){ try{ const d=await api("get",{projectId}); setProject(d.project); refreshStatuses(d.project);}catch(e){ setErr(e.message);} }
   async function refreshStatuses(prj){
-    const raws = ordered(prj.raws);
-    for(const r of raws){
-      try{
-        const s = await api("status",{driveFileId:r.driveFileId});
-        setLive(L=>({...L,[r.id]:{...(L[r.id]||{}), status:s.status==="working"?( (L[r.id]&&L[r.id].status==="working")?"working":"queued"):s.status, error:s.error }}));
+    for(const r of ordered(prj.raws)){
+      try{ const s=await api("status",{driveFileId:r.driveFileId});
+        setLive(L=>({...L,[r.id]:{...(L[r.id]||{}),status:(s.status==="working"?((L[r.id]&&L[r.id].status==="working")?"working":"queued"):s.status),error:s.error}}));
+        if(s.status==="ready"){ try{ const a=await analyzeApi({driveFileId:r.driveFileId,peek:true}); if(a.analysis) setLive(L=>({...L,[r.id]:{...L[r.id],analysis:a.analysis}})); }catch(_){} }
       }catch(_){}
     }
   }
   useEffect(()=>{ load(); return ()=>{ if(pollRef.current) clearInterval(pollRef.current); }; },[projectId]);
-
-  // polling per le take in lavorazione
   useEffect(()=>{
-    if(pollRef.current) clearInterval(pollRef.current);
-    const working = Object.entries(live).filter(([id,v])=>v.status==="working");
-    if(working.length===0) return;
-    pollRef.current = setInterval(async ()=>{
+    if(pollRef.current) clearInterval(pollRef.current); if(!project) return;
+    if(!Object.values(live).some(v=>v.status==="working")) return;
+    pollRef.current=setInterval(async()=>{
       for(const [rawId,v] of Object.entries(live)){
         if(v.status!=="working") continue;
-        const raw = (project.raws||[]).find(r=>r.id===rawId); if(!raw) continue;
-        try{
-          const s = await api("status",{driveFileId:raw.driveFileId});
-          if(s.status==="ready"||s.status==="error"){
-            setLive(L=>({...L,[rawId]:{...L[rawId], status:s.status, error:s.error}}));
-          }
+        const raw=(project.raws||[]).find(r=>r.id===rawId); if(!raw) continue;
+        try{ const s=await api("status",{driveFileId:raw.driveFileId});
+          if(s.status==="ready"||s.status==="error") setLive(L=>({...L,[rawId]:{...L[rawId],status:s.status,error:s.error}}));
         }catch(_){}
       }
-    }, 5000);
+    },5000);
     return ()=>{ if(pollRef.current) clearInterval(pollRef.current); };
   },[live,project]);
 
-  async function addRaw(){
-    if(!link.trim()) return;
-    setErr(""); setBusy(true);
-    try{ const d = await api("addRaw",{projectId, link:link.trim()}); setProject(d.project); setLink(""); }
-    catch(e){ setErr(e.message); }
-    setBusy(false);
-  }
-  async function move(raw,dir){
-    try{ const d = await api("reorderRaw",{projectId, rawId:raw.id, direction:dir}); setProject(d.project); }
-    catch(e){ setErr(e.message); }
-  }
-  async function delRaw(raw){
-    if(!confirm("Rimuovere questo grezzo dal progetto?")) return;
-    try{ const d = await api("deleteRaw",{projectId, rawId:raw.id}); setProject(d.project); }
-    catch(e){ setErr(e.message); }
-  }
+  async function addRaw(){ if(!link.trim())return; setErr("");setBusy(true);
+    try{ const d=await api("addRaw",{projectId,link:link.trim()}); setProject(d.project); setLink("");}catch(e){setErr(e.message);} setBusy(false); }
+  async function move(raw,dir){ try{ const d=await api("reorderRaw",{projectId,rawId:raw.id,direction:dir}); setProject(d.project);}catch(e){setErr(e.message);} }
+  async function delRaw(raw){ if(!confirm("Rimuovere questo grezzo dal progetto?"))return; try{ const d=await api("deleteRaw",{projectId,rawId:raw.id}); setProject(d.project);}catch(e){setErr(e.message);} }
   async function transcribe(raw){
-    setLive(L=>({...L,[raw.id]:{...(L[raw.id]||{}), status:"working", startedAt:Date.now(), tx:null, error:null}}));
-    try{
-      await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId})});
-    }catch(e){
-      setLive(L=>({...L,[raw.id]:{...L[raw.id], status:"error", error:"Avvio non riuscito: "+e.message}}));
-    }
+    setLive(L=>({...L,[raw.id]:{...(L[raw.id]||{}),status:"working",startedAt:Date.now(),tx:null,error:null,analysis:null}}));
+    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId})}); }
+    catch(e){ setLive(L=>({...L,[raw.id]:{...L[raw.id],status:"error",error:"Avvio non riuscito: "+e.message}})); }
   }
-  async function viewTx(raw){
-    try{ const d = await api("transcript",{driveFileId:raw.driveFileId}); setLive(L=>({...L,[raw.id]:{...L[raw.id], tx:d.transcript}})); }
-    catch(e){ setErr(e.message); }
+  async function viewTx(raw){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); setLive(L=>({...L,[raw.id]:{...L[raw.id],tx:d.transcript}}));}catch(e){ setErr(e.message);} }
+  async function analyze(raw){
+    const force = !!(live[raw.id] && live[raw.id].analysis);
+    setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:true}}));
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,force}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,analyzing:false}})); }
+    catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:false}})); }
   }
-  // inietta onView in ogni live
-  const liveFor = (raw)=>({...(live[raw.id]||{}), onView:()=>viewTx(raw)});
+  async function saveName(){ const n=tempName.trim(); if(!n){setEditing(false);return;} try{ const d=await api("rename",{projectId,name:n}); setProject(d.project); setEditing(false);}catch(e){setErr(e.message);} }
+  async function deleteProject(){ if(!confirm("Cancellare l'intero progetto e le sue trascrizioni? L'operazione non è reversibile."))return; try{ await api("deleteProject",{projectId}); onDeleted();}catch(e){ setErr(e.message);} }
+  const liveFor=(raw)=>({...(live[raw.id]||{}),onView:()=>viewTx(raw)});
 
-  if(!project) return <div className="empty">{err? <div className="banner">{err}</div> : <div><span className="spin"></span> Carico il progetto…</div>}</div>;
-  const raws = ordered(project.raws);
-  return (
-    <div>
-      <div className="top">
-        <span className="brand"><b>LHM</b> Video Editor</span>
-        <span className="crumb" onClick={onBack}>Progetti</span>
-        <span className="muted">/</span>
-        <h1>{project.name}</h1>
-      </div>
-      {err && <div className="banner">{err}</div>}
-
-      <div className="newbar">
-        <input className="field" placeholder="Incolla il link Drive del grezzo…" value={link}
-          onChange={e=>setLink(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addRaw();}} />
-        <button className="btn pri" onClick={addRaw} disabled={busy || !link.trim()}>{busy? <span className="spin"></span>:"Aggiungi"}</button>
-      </div>
-
-      {raws.length===0 ? (
-        <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
-      ) : (
-        <div className="seq">
-          {raws.map((r,i)=>(
-            <Take key={r.id} raw={r} index={i} total={raws.length}
-              onMove={move} onDelete={delRaw} onTranscribe={transcribe} live={liveFor(r)} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- Schermata elenco progetti ----------
-function ProjectList({onOpen}){
-  const [projects,setProjects] = useState(null);
-  const [name,setName] = useState("");
-  const [err,setErr] = useState("");
-  const [busy,setBusy] = useState(false);
-
-  async function load(){
-    try{ const d = await api("list"); setProjects(d.projects||[]); }
-    catch(e){ setErr(e.message); setProjects([]); }
-  }
-  useEffect(()=>{ load(); },[]);
-
-  async function create(){
-    if(!name.trim()) return;
-    setBusy(true); setErr("");
-    try{ const d = await api("create",{name:name.trim()}); setName(""); await load(); onOpen(d.project.id); }
-    catch(e){ setErr(e.message); }
-    setBusy(false);
-  }
-
-  return (
-    <div>
-      <div className="top">
-        <span className="brand"><b>LHM</b> Video Editor</span>
-        <h1>Progetti</h1>
-      </div>
-      {err && <div className="banner">{err}</div>}
-
-      <div className="newbar">
-        <input className="field" placeholder="Nome del nuovo progetto (es. Alberto — buon esempio)" value={name}
-          onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")create();}} />
-        <button className="btn pri" onClick={create} disabled={busy || !name.trim()}>{busy? <span className="spin"></span>:"Nuovo progetto"}</button>
-      </div>
-
-      {projects===null ? (
-        <div className="empty"><span className="spin"></span> Carico i progetti…</div>
-      ) : projects.length===0 ? (
-        <div className="empty"><h3>Nessun progetto</h3>Dai un nome qui sopra per crearne uno e iniziare.</div>
-      ) : (
-        <div className="stack">
-          {projects.map(p=>(
-            <div key={p.id} className="card pcard" onClick={()=>onOpen(p.id)}>
-              <div>
-                <h3>{p.name}</h3>
-                <div className="meta">Creato il {fmtDate(p.createdAt)}</div>
-              </div>
-              <span className="chev">›</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- App ----------
-function App(){
-  const [openId,setOpenId] = useState(null);
+  if(!project) return <div className="wrap"><div className="empty">{err?<div className="banner">{err}</div>:<div><span className="spin"></span> Carico il progetto…</div>}</div></div>;
+  const raws=ordered(project.raws);
   return (
     <div className="wrap">
-      {openId
-        ? <ProjectView projectId={openId} onBack={()=>setOpenId(null)} />
-        : <ProjectList onOpen={setOpenId} />}
+      <div className="top">
+        <span className="brand"><b>LHM</b> Video Editor</span>
+        <span className="crumb" onClick={onBack}>Progetti</span><span className="muted">/</span>
+        {editing
+          ? <span className="renamebar"><input className="field" value={tempName} autoFocus onChange={e=>setTempName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveName();if(e.key==="Escape")setEditing(false);}} /><button className="btn sm pri" onClick={saveName}>Salva</button><button className="btn sm ghost" onClick={()=>setEditing(false)}>Annulla</button></span>
+          : <><h1>{project.name}</h1><button className="btn sm ghost" onClick={()=>{setTempName(project.name);setEditing(true);}}>Rinomina</button><span className="grow"></span><button className="btn sm danger" onClick={deleteProject}>Elimina progetto</button></>
+        }
+      </div>
+      {err && <div className="banner">{err}</div>}
+      <div className="newbar">
+        <input className="field" placeholder="Incolla il link Drive del grezzo…" value={link} onChange={e=>setLink(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addRaw();}} />
+        <button className="btn pri" onClick={addRaw} disabled={busy||!link.trim()}>{busy?<span className="spin"></span>:"Aggiungi"}</button>
+      </div>
+      {raws.length===0
+        ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
+        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} live={liveFor(r)} />)}</div>}
     </div>
   );
+}
+
+function ProjectList({onOpen}){
+  const [projects,setProjects]=useState(null);
+  const [name,setName]=useState(""); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
+  async function load(){ try{ const d=await api("summaries"); setProjects(d.projects||[]);}catch(e){ setErr(e.message); setProjects([]);} }
+  useEffect(()=>{ load(); },[]);
+  async function create(){ if(!name.trim())return; setBusy(true);setErr("");
+    try{ const d=await api("create",{name:name.trim()}); setName(""); onOpen(d.project.id);}catch(e){setErr(e.message);} setBusy(false); }
+  async function del(p,ev){ ev.stopPropagation(); if(!confirm("Cancellare «"+p.name+"» e le sue trascrizioni? Non è reversibile."))return;
+    try{ await api("deleteProject",{projectId:p.id}); load();}catch(e){ setErr(e.message);} }
+  return (
+    <div className="wrap">
+      <div className="top"><span className="brand"><b>LHM</b> Video Editor</span><h1>Progetti</h1></div>
+      {err && <div className="banner">{err}</div>}
+      <div className="newbar">
+        <input className="field" placeholder="Nome del nuovo progetto (es. Alberto — buon esempio)" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")create();}} />
+        <button className="btn pri" onClick={create} disabled={busy||!name.trim()}>{busy?<span className="spin"></span>:"Nuovo progetto"}</button>
+      </div>
+      {projects===null
+        ? <div className="empty"><span className="spin"></span> Carico i progetti…</div>
+        : projects.length===0
+          ? <div className="empty"><h3>Nessun progetto</h3>Dai un nome qui sopra per crearne uno e iniziare.</div>
+          : <div className="stack">{projects.map(p=>(
+              <div key={p.id} className="card pcard">
+                <div className="body" onClick={()=>onOpen(p.id)}>
+                  <h3>{p.name}</h3>
+                  <div className="meta"><span>Creato il {fmtDate(p.createdAt)}</span><span className="pill">{p.rawCount||0} grezzi</span>{p.doneCount>0 && <span className="pill ok">{p.doneCount} trascritti</span>}</div>
+                </div>
+                <button className="btn sm ghost danger" onClick={(e)=>del(p,e)} title="Elimina progetto">Elimina</button>
+                <span className="chev" onClick={()=>onOpen(p.id)}>›</span>
+              </div>
+            ))}</div>}
+    </div>
+  );
+}
+
+function App(){
+  const [openId,setOpenId]=useState(null);
+  return openId
+    ? <ProjectView projectId={openId} onBack={()=>setOpenId(null)} onDeleted={()=>setOpenId(null)} />
+    : <ProjectList onOpen={setOpenId} />;
 }
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
 </script>
