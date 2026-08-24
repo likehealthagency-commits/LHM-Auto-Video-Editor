@@ -120,6 +120,12 @@
   .tinput{font-family:"IBM Plex Mono";font-size:13px;width:104px;padding:6px 8px;border:1px solid var(--line);border-radius:7px}
   .tinput:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
   .audiobar{display:flex;align-items:center;gap:10px;margin:2px 0 12px}
+  .playerbar{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;align-items:center;gap:12px;padding:10px 18px;background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -2px 14px rgba(0,0,0,.07)}
+  .playerbar .pbtn{width:38px;height:38px;border-radius:50%;border:none;background:var(--accent);color:#fff;font-size:15px;cursor:pointer;flex-shrink:0}
+  .playerbar .ptime{font-size:12px;color:var(--muted);min-width:46px;text-align:center;flex-shrink:0}
+  .playerbar .pseek{flex:1;height:7px;background:var(--line);border-radius:4px;cursor:pointer;position:relative}
+  .playerbar .pfill{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:4px}
+  .playerbar .pclose{border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;color:var(--muted);flex-shrink:0}
   .cut.active{outline:2px solid var(--accent);outline-offset:-1px;background:var(--accent-wash)}
   .cut .tc{cursor:pointer}
   .forcebox{margin-top:18px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:#FAFBFC}
@@ -185,10 +191,15 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   function segWords(d){ return (words||[]).filter(w=> w.start>=d.start-0.01 && w.start<d.end+0.01).sort((a,b)=>a.start-b.start); }
   const audioRef=useRef(null);
   const [audioUrl,setAudioUrl]=useState(null); const [aPlaying,setAPlaying]=useState(false); const [aT,setAT]=useState(0);
+  const [aMsg,setAMsg]=useState("");
+  const [aDur,setADur]=useState(0); const [barOpen,setBarOpen]=useState(false);
   const [fStart,setFStart]=useState(""); const [fEnd,setFEnd]=useState(""); const [fMsg,setFMsg]=useState(""); const [fBusy,setFBusy]=useState(false);
-  async function loadAudio(){ if(audioUrl) return audioUrl; try{ const d=await api("audioUrl",{driveFileId:data.driveFileId}); if(!d.url){ setFMsg("Audio non disponibile: ri-trascrivi il video intero."); return null; } setAudioUrl(d.url); return d.url; }catch(e){ setFMsg("Audio non disponibile."); return null; } }
-  async function toggleAudio(){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } if(a.paused){ a.play().catch(()=>{}); setAPlaying(true); } else { a.pause(); setAPlaying(false); } }
-  async function seekAudio(t){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } try{ a.currentTime=t; }catch(_){}; setAT(t); a.play().catch(()=>{}); setAPlaying(true); }
+  async function loadAudio(){ if(audioUrl) return audioUrl; setAMsg("Carico l'audio…"); try{ const d=await api("audioUrl",{driveFileId:data.driveFileId}); if(!d.url){ setAMsg("Audio non ancora salvato: ri-trascrivi questo video (la nuova trascrizione salva l'audio)."); return null; } setAudioUrl(d.url); setAMsg(""); return d.url; }catch(e){ setAMsg("Errore nel recupero audio: "+((e&&e.message)||e)); return null; } }
+  async function startAudio(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setBarOpen(true); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Il browser non riesce a riprodurre l'audio: "+(err&&err.message||err)); }); }
+  function playPause(){ const a=audioRef.current; if(!a) return; if(a.paused){ a.play().catch(()=>{}); setAPlaying(true); } else { a.pause(); setAPlaying(false); } }
+  function seekBar(e){ const a=audioRef.current; if(!a||!aDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; const t=Math.max(0,Math.min(aDur,p*aDur)); a.currentTime=t; setAT(t); }
+  function closeBar(){ const a=audioRef.current; if(a) a.pause(); setAPlaying(false); setBarOpen(false); }
+  async function seekAudio(t){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setBarOpen(true); try{ a.currentTime=t; }catch(_){}; setAT(t); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Riproduzione non riuscita: "+(err&&err.message||err)); }); }
   function isActive(d){ return aT>=d.start-0.02 && aT<d.end; }
   async function doForce(){
     const sc=parseClock(fStart), ec=parseClock(fEnd);
@@ -225,10 +236,17 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
       <div className="scriptbox">{data.cleanScript}</div>
       <div style={{marginTop:8,display:"flex",gap:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button><button className="btn sm pri" onClick={onApprove}>Approva e apri l’editor</button></div>
       <div className="audiobar">
-        <button className="btn sm" onClick={toggleAudio}>{aPlaying?"⏸ Pausa":"▶ Ascolta l'audio"}</button>
-        <span className="mono" style={{fontSize:12,color:"var(--muted)"}}>{fmtTC(aT)}</span>
-        <audio ref={audioRef} onTimeUpdate={e=>setAT(e.currentTarget.currentTime||0)} onEnded={()=>setAPlaying(false)} style={{display:"none"}}></audio>
+        <button className="btn sm" onClick={startAudio}>▶ Ascolta l'audio</button>
+        {aMsg && <span style={{fontSize:12,color:"var(--muted)"}}>{aMsg}</span>}
+        <audio ref={audioRef} onLoadedMetadata={e=>setADur(e.currentTarget.duration||0)} onError={()=>setAMsg("Il browser non e' riuscito a caricare l'audio (link scaduto o formato non supportato).")} onTimeUpdate={e=>setAT(e.currentTarget.currentTime||0)} onEnded={()=>setAPlaying(false)} style={{display:"none"}}></audio>
       </div>
+      {barOpen && <div className="playerbar">
+        <button className="pbtn" onClick={playPause}>{aPlaying?"⏸":"▶"}</button>
+        <span className="ptime mono">{fmtTC(aT)}</span>
+        <div className="pseek" onClick={seekBar}><div className="pfill" style={{width:(aDur?Math.min(100,aT/aDur*100):0)+"%"}}></div></div>
+        <span className="ptime mono">{fmtTC(aDur)}</span>
+        <button className="pclose" onClick={closeBar} title="Chiudi">×</button>
+      </div>}
       <div className="lbl">Lista tagli</div>
       <div>
         {data.decisions.map(d=>(
@@ -268,6 +286,7 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
         </div>
         {fMsg && <div className="forcemsg">{fMsg}</div>}
       </div>
+      {barOpen && <div style={{height:72}}></div>}
     </div>
   );
 }
