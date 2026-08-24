@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LHM Auto Video Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EBEDF0; --surface:#FFFFFF; --ink:#161A20; --muted:#6A7280; --line:#E1E4E9;
+    --accent:#2F54EB; --accent-ink:#1D39C4; --accent-wash:#EEF1FE;
+    --queued:#8A94A6; --working:#D98A1F; --ready:#1F9D66; --error:#E5484D;
+    --keep:#1F9D66; --discard:#E5484D;
+    --radius:12px; --shadow:0 1px 2px rgba(20,24,32,.04),0 8px 24px rgba(20,24,32,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+  .wrap{max-width:860px;margin:0 auto;padding:28px 20px 80px}
+  .top{display:flex;align-items:baseline;gap:12px;margin:6px 0 26px;border-bottom:1px solid var(--line);padding-bottom:18px;flex-wrap:wrap}
+  .brand{font-family:"IBM Plex Mono";font-weight:600;letter-spacing:.04em;font-size:13px;text-transform:uppercase;color:var(--accent-ink)}
+  .brand b{color:var(--ink)}
+  .top h1{font-size:20px;font-weight:600;margin:0}
+  .crumb{font-size:13px;color:var(--muted);cursor:pointer}.crumb:hover{color:var(--ink)}
+  .grow{flex:1}
+  .btn{font-family:inherit;font-size:14px;font-weight:500;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:9px 15px;border-radius:9px;cursor:pointer;transition:.12s}
+  .btn:hover{border-color:#C9CED6}.btn:disabled{opacity:.5;cursor:default}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}.btn.pri:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--muted);padding:6px 8px}.btn.ghost:hover{color:var(--ink);background:#0000000a}
+  .btn.sm{padding:6px 10px;font-size:13px}
+  .btn.danger{color:var(--error)}.btn.danger:hover{border-color:#F3C6C7;background:#fdecec}
+  .field{width:100%;font-family:inherit;font-size:14px;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink)}
+  .field:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+  .stack{display:flex;flex-direction:column;gap:10px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+  .pcard{display:flex;align-items:center;gap:14px;padding:16px 18px;transition:.12s}
+  .pcard .body{flex:1;cursor:pointer}.pcard:hover{border-color:#C9CED6;transform:translateY(-1px)}
+  .pcard h3{margin:0;font-size:16px;font-weight:600}
+  .pcard .meta{font-size:12.5px;color:var(--muted);margin-top:3px;display:flex;gap:8px;align-items:center}
+  .pill{font-family:"IBM Plex Mono";font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:20px;background:#f0f2f5;color:var(--muted)}
+  .pill.ok{background:#1f9d6614;color:var(--ready)}
+  .pcard .chev{color:var(--muted);font-size:20px;cursor:pointer}
+  .newbar{display:flex;gap:10px;margin-bottom:22px}
+  .seq{position:relative;margin-left:6px;padding-left:26px}
+  .seq:before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:2px;background:var(--line)}
+  .take{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:15px 16px;margin-bottom:12px}
+  .take:before{content:"";position:absolute;left:-21px;top:22px;width:9px;height:9px;border-radius:50%;background:var(--surface);border:2px solid var(--accent)}
+  .take .head{display:flex;align-items:center;gap:12px}
+  .num{font-family:"IBM Plex Mono";font-weight:600;font-size:13px;color:var(--accent-ink);background:var(--accent-wash);border-radius:6px;padding:3px 8px;min-width:34px;text-align:center}
+  .take .title{flex:1;min-width:0}
+  .take .title .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .take .title .id{font-family:"IBM Plex Mono";font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .take .arrows{display:flex;flex-direction:column;gap:1px}
+  .take .arrows button{border:none;background:transparent;color:var(--muted);cursor:pointer;line-height:.8;font-size:12px;padding:2px 4px;border-radius:4px}
+  .take .arrows button:hover{color:var(--ink);background:#0000000a}.take .arrows button:disabled{opacity:.3;cursor:default}
+  .actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;padding:4px 9px;border-radius:20px}
+  .chip .dot{width:7px;height:7px;border-radius:50%}
+  .chip.queued{color:var(--queued);background:#8a94a615}.chip.working{color:var(--working);background:#d98a1f15}
+  .chip.ready{color:var(--ready);background:#1f9d6615}.chip.error{color:var(--error);background:#e5484d15}
+  .chip.queued .dot{background:var(--queued)}.chip.working .dot{background:var(--working);animation:pulse 1s infinite}
+  .chip.ready .dot{background:var(--ready)}.chip.error .dot{background:var(--error)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .bar{height:7px;background:#EEF0F3;border-radius:20px;overflow:hidden;margin-top:12px}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#5B7BF0);border-radius:20px;transition:width .6s ease}
+  .barlabel{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:6px}.barlabel .mono{color:var(--accent-ink)}
+  .tx{margin-top:12px;border-top:1px dashed var(--line);padding-top:12px}
+  .tx p{margin:0 0 8px;font-size:14px;color:#2A2F38;max-height:120px;overflow:auto}
+  .tx .stat{font-size:12px;color:var(--muted)}
+  /* analisi / tagli */
+  .analysis{margin-top:14px;border-top:1px solid var(--line);padding-top:14px}
+  .asum{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .silrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-4px 0 14px}
+  .silinfo{font-size:12.5px;color:var(--muted)}
+  .silpresets{display:flex;gap:6px;flex-wrap:wrap}
+  .asum .t{font-weight:600;font-size:14px}
+  .tag{font-family:"IBM Plex Mono";font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:20px}
+  .tag.keep{background:#1f9d6614;color:var(--keep)} .tag.discard{background:#e5484d14;color:var(--discard)}
+  .scriptbox{background:#F7F8FA;border:1px solid var(--line);border-radius:9px;padding:12px 13px;font-size:14px;color:#22262E;max-height:150px;overflow:auto;white-space:pre-wrap}
+  .lbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px}
+  .cut{display:flex;gap:10px;padding:8px 0;align-items:flex-start;border-bottom:1px solid #EEF0F3}
+  .cut:last-child{border-bottom:none}
+  .cut .tc{font-family:"IBM Plex Mono";font-size:12px;color:var(--muted);min-width:96px;flex-shrink:0;padding-top:1px}
+  .cut .bd{flex:1;min-width:0}
+  .cut .txt{font-size:13.5px}
+  .cut .rs{font-size:12px;color:var(--muted);margin-top:2px}
+  .cut.discard .txt{color:#9AA1AC;text-decoration:line-through}
+  .cut .mk{font-family:"IBM Plex Mono";font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:5px;height:fit-content;margin-top:1px}
+  .cut.keep .mk{background:#1f9d6614;color:var(--keep)} .cut.discard .mk{background:#e5484d14;color:var(--discard)}
+  .cutctl{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0}
+  .splitrow{margin:6px 0 10px;padding:10px 12px;background:#F7F8FA;border:1px solid var(--line);border-radius:8px}
+  .splithint{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .chips{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+  .chip2{font-size:13px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:3px 7px;cursor:pointer;font-family:inherit}
+  .chip2:hover{border-color:var(--accent);color:var(--accent-ink)}
+  .chip2.last{cursor:default;opacity:.6}
+  .chip2 .sep{color:var(--accent);margin-left:5px;font-weight:700}
+  .empty{text-align:center;padding:54px 20px;color:var(--muted)}
+  .empty h3{color:var(--ink);font-weight:600;margin:0 0 6px;font-size:17px}
+  .banner{background:#FDECEC;border:1px solid #F3C6C7;color:#A32B2E;padding:11px 14px;border-radius:9px;font-size:13.5px;margin-bottom:16px}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .muted{color:var(--muted)}
+  .renamebar{display:flex;gap:8px;align-items:center;flex:1}
+  .vwrap{background:#000;border-radius:10px;overflow:hidden;margin-top:6px}
+  .vwrap video{display:block;width:100%;max-height:58vh;background:#000}
+  .ctrls{display:flex;align-items:center;gap:14px;margin-top:12px}
+  .ctrls .time{font-family:"IBM Plex Mono";font-size:13px;color:var(--muted)}
+  .tl{position:relative;height:46px;background:#20242B;border-radius:8px;overflow:hidden;cursor:pointer;margin-top:14px}
+  .tl .k{position:absolute;top:0;bottom:0;background:linear-gradient(180deg,#6E8BF5,var(--accent))}
+  .tl .ph{position:absolute;top:-2px;bottom:-2px;width:2px;background:#fff;box-shadow:0 0 6px rgba(255,255,255,.9)}
+  .tl .k .h{position:absolute;top:0;bottom:0;width:9px;background:rgba(255,255,255,.55);cursor:ew-resize}
+  .tl .k .h:hover{background:rgba(255,255,255,.95)}
+  .tl .k .h.l{left:0} .tl .k .h.r{right:0}
+  .tlhint{font-size:12px;color:var(--muted);margin-top:8px}
+  .edpanel{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+  .edpanel label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .tinput{font-family:"IBM Plex Mono";font-size:13px;width:104px;padding:6px 8px;border:1px solid var(--line);border-radius:7px}
+  .tinput:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+  .audiobar{display:flex;align-items:center;gap:10px;margin:2px 0 12px}
+  .cut.active{outline:2px solid var(--accent);outline-offset:-1px;background:var(--accent-wash)}
+  .cut .tc{cursor:pointer}
+  .forcebox{margin-top:18px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:#FAFBFC}
+  .forcerow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
+  .forcemsg{margin-top:8px;font-size:13px;color:var(--accent-ink)}
+  .tl .k.sel{outline:2px solid #fff;outline-offset:-1px}
+  .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:8px}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const API="/.netlify/functions/progetti";
+const TRANSCRIBE="/.netlify/functions/trascrivi-grezzo-background";
+const ANALYZE="/.netlify/functions/analizza";
+const STREAM_INGEST="/.netlify/functions/stream-ingest";
+const STREAM_BRIDGE="/.netlify/functions/stream-bridge-background";
+async function streamApi(action,driveFileId){
+  const res=await fetch(STREAM_INGEST,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,driveFileId})});
+  const d=await res.json().catch(()=>({})); if(!res.ok) throw new Error(d.error||("Errore "+res.status)); return d;
+}
+const streamTriggered=new Set();
+async function triggerStream(driveFileId){
+  if(streamTriggered.has(driveFileId)) return;
+  streamTriggered.add(driveFileId);
+  try{ const st=await streamApi("status",driveFileId); if(st.state==="none"){ fetch(STREAM_BRIDGE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId})}); } }catch(_){}
+}
+const EST_MS=150000;
+
+async function api(action,extra){
+  const res=await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({action},extra||{}))});
+  const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||("Errore "+res.status)); return data;
+}
+async function analyzeApi(body){
+  const res=await fetch(ANALYZE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||("Errore "+res.status)); return data;
+}
+async function forceApi(driveFileId,start,end){ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId,forceRange:{start,end}})}); }
+function parseClock(str){ str=String(str||"").trim(); if(!str) return NaN; if(str.indexOf(":")>=0){ const a=str.split(":"); return (parseFloat(a[0])||0)*60+(parseFloat(a[1])||0); } return parseFloat(str); }
+function fmtDate(iso){ try{ return new Date(iso).toLocaleDateString("it-IT",{day:"numeric",month:"short",year:"numeric"});}catch(_){return "";} }
+function fmtTC(sec){ sec=Math.max(0,Math.round(sec||0)); const m=Math.floor(sec/60), s=sec%60; return m+":"+String(s).padStart(2,"0"); }
+function ordered(raws){ return (raws||[]).slice().sort((a,b)=>(a.order||0)-(b.order||0)); }
+
+function Chip({status}){
+  const label={queued:"In attesa",working:"Trascrizione in corso",ready:"Trascritto",error:"Errore"}[status]||status;
+  return <span className={"chip "+status}><span className="dot"></span>{label}</span>;
+}
+function Progress({startedAt}){
+  const [pct,setPct]=useState(2);
+  useEffect(()=>{ const t=setInterval(()=>{const el=Date.now()-startedAt;const p=Math.min(95,Math.round((el/EST_MS)*100));setPct(p<2?2:p);},800); return ()=>clearInterval(t); },[startedAt]);
+  return <div><div className="bar"><i style={{width:pct+"%"}}></i></div><div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div></div>;
+}
+
+function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onStartSplit,onDoSplit,onCancelSplit,words,splitting,onUndo,onRedo,canUndo,canRedo}){
+  const [copied,setCopied]=useState(false);
+  function copy(){ try{ navigator.clipboard.writeText(data.cleanScript); setCopied(true); setTimeout(()=>setCopied(false),1500);}catch(_){}}
+  function segWords(d){ return (words||[]).filter(w=> w.start>=d.start-0.01 && w.start<d.end+0.01).sort((a,b)=>a.start-b.start); }
+  const audioRef=useRef(null);
+  const [audioUrl,setAudioUrl]=useState(null); const [aPlaying,setAPlaying]=useState(false); const [aT,setAT]=useState(0);
+  const [fStart,setFStart]=useState(""); const [fEnd,setFEnd]=useState(""); const [fMsg,setFMsg]=useState(""); const [fBusy,setFBusy]=useState(false);
+  async function loadAudio(){ if(audioUrl) return audioUrl; try{ const d=await api("audioUrl",{driveFileId:data.driveFileId}); if(!d.url){ setFMsg("Audio non disponibile: ri-trascrivi il video intero."); return null; } setAudioUrl(d.url); return d.url; }catch(e){ setFMsg("Audio non disponibile."); return null; } }
+  async function toggleAudio(){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } if(a.paused){ a.play().catch(()=>{}); setAPlaying(true); } else { a.pause(); setAPlaying(false); } }
+  async function seekAudio(t){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } try{ a.currentTime=t; }catch(_){}; setAT(t); a.play().catch(()=>{}); setAPlaying(true); }
+  function isActive(d){ return aT>=d.start-0.02 && aT<d.end; }
+  async function doForce(){
+    const sc=parseClock(fStart), ec=parseClock(fEnd);
+    if(isNaN(sc)||isNaN(ec)||ec<=sc){ setFMsg("Intervallo non valido: usa il formato m:ss (es. 0:52)."); return; }
+    setFBusy(true); setFMsg("Ri-trascrizione dell'intervallo in corso… (~20-40 secondi)");
+    try{
+      await forceApi(data.driveFileId, sc, ec);
+      let done=null;
+      for(let i=0;i<30 && !done;i++){ await new Promise(r=>setTimeout(r,3000)); try{ const d=await api("forceStatus",{driveFileId:data.driveFileId}); if(d.status && d.status.done) done=d.status; }catch(_){} }
+      if(done && done.error) setFMsg("Errore: "+done.error);
+      else if(done) setFMsg("Fatto: aggiunte "+(done.addedWords||0)+" parole in quell'intervallo. Premi “Rigenera da capo” per rivederle nei tagli.");
+      else setFMsg("Sta impiegando piu' del previsto: attendi ancora e poi rigenera i tagli.");
+    }catch(e2){ setFMsg("Errore: "+e2.message); }
+    setFBusy(false);
+  }
+  return (
+    <div className="analysis">
+      <div className="asum">
+        <span className="t">Proposta di montaggio</span>
+        <button className="btn sm ghost" disabled={!canUndo} title="Annulla ultima modifica" onClick={onUndo}>↶ Annulla</button>
+        <button className="btn sm ghost" disabled={!canRedo} title="Ripeti modifica annullata" onClick={onRedo}>↷ Ripeti</button>
+        <span className="tag keep">{data.stats.kept} da tenere</span>
+        <span className="tag discard">{data.stats.discarded} da tagliare</span>
+      </div>
+      <div className="silrow">
+        <span className="silinfo">Silenzi tolti: {data.silenceCutSeconds!=null?("~"+data.silenceCutSeconds+"s"):"—"} · pause</span>
+        <span className="silpresets">
+          {[["Off",9999],["Leggero",1],["Medio",0.7],["Aggressivo",0.45]].map(o=>(
+            <button key={o[0]} className={"btn sm"+(Math.abs((data.silenceThreshold!=null?data.silenceThreshold:0.7)-o[1])<0.001?" pri":"")} disabled={resilencing} onClick={()=>onResilence(o[1])}>{o[0]}</button>
+          ))}
+        </span>
+      </div>
+      <div className="lbl">Script pulito</div>
+      <div className="scriptbox">{data.cleanScript}</div>
+      <div style={{marginTop:8,display:"flex",gap:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button><button className="btn sm pri" onClick={onApprove}>Approva e apri l’editor</button></div>
+      <div className="audiobar">
+        <button className="btn sm" onClick={toggleAudio}>{aPlaying?"⏸ Pausa":"▶ Ascolta l'audio"}</button>
+        <span className="mono" style={{fontSize:12,color:"var(--muted)"}}>{fmtTC(aT)}</span>
+        <audio ref={audioRef} onTimeUpdate={e=>setAT(e.currentTarget.currentTime||0)} onEnded={()=>setAPlaying(false)} style={{display:"none"}}></audio>
+      </div>
+      <div className="lbl">Lista tagli</div>
+      <div>
+        {data.decisions.map(d=>(
+          <div key={d.i}>
+            <div className={"cut "+d.action+(isActive(d)?" active":"")}>
+              <div className="tc" onClick={()=>seekAudio(d.start)} title="Ascolta da qui">{fmtTC(d.start)} – {fmtTC(d.end)}</div>
+              <div className="bd">
+                <div className="txt">{d.text}</div>
+                {d.reason && <div className="rs">{d.reason}</div>}
+              </div>
+              <div className="cutctl">
+                <div className="mk">{d.action==="keep"?"TIENI":"TAGLIA"}</div>
+                <button className="btn sm ghost" disabled={toggling} onClick={()=>onToggle(d.i)}>{d.action==="keep"?"→ Taglia":"→ Tieni"}</button>
+                <button className="btn sm ghost" onClick={()=>onStartSplit(d.i)}>Dividi</button>
+              </div>
+            </div>
+            {splitting===d.i && (
+              <div className="splitrow">
+                <div className="splithint">Clicca dopo la parola in cui vuoi dividere la frase in due:</div>
+                <div className="chips">
+                  {segWords(d).map((w,wi,arr)=> wi<arr.length-1
+                    ? <button key={wi} className="chip2" onClick={()=>onDoSplit(d.i,(w.end+arr[wi+1].start)/2)}>{w.word}<span className="sep">|</span></button>
+                    : <span key={wi} className="chip2 last">{w.word}</span>)}
+                </div>
+                <button className="btn sm ghost" onClick={onCancelSplit}>Annulla</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="forcebox">
+        <div className="lbl">Manca un pezzo? Forza la trascrizione di un intervallo</div>
+        <div className="forcerow">
+          <label>Da <input className="tinput" placeholder="m:ss" value={fStart} onChange={e=>setFStart(e.target.value)} /></label>
+          <label>A <input className="tinput" placeholder="m:ss" value={fEnd} onChange={e=>setFEnd(e.target.value)} /></label>
+          <button className="btn sm pri" disabled={fBusy} onClick={doForce}>{fBusy?"In corso…":"Forza trascrizione"}</button>
+        </div>
+        {fMsg && <div className="forcemsg">{fMsg}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,onStartSplit,onDoSplit,onCancelSplit,onUndo,onRedo,live}){
+  const status=live.status||raw.status||"queued";
+  return (
+    <div className="take">
+      <div className="head">
+        <span className="num">{String(index+1).padStart(2,"0")}</span>
+        <div className="title"><div className="nm">{raw.name||"Video senza nome"}</div><div className="id" title={raw.link||raw.driveFileId}>{raw.driveFileId}</div></div>
+        <div className="arrows">
+          <button onClick={()=>onMove(raw,"up")} disabled={index===0} title="Sposta su">▲</button>
+          <button onClick={()=>onMove(raw,"down")} disabled={index===total-1} title="Sposta giù">▼</button>
+        </div>
+      </div>
+      <div className="actions">
+        <Chip status={status} />
+        {status!=="working" && <button className="btn sm pri" onClick={()=>onTranscribe(raw)}>{status==="ready"?"Ritrascrivi":"Trascrivi"}</button>}
+        {status==="ready" && <button className="btn sm" onClick={()=>live.onView(raw)}>Vedi trascrizione</button>}
+        {status==="ready" && <button className="btn sm" onClick={()=>onAnalyze(raw)} disabled={live.analyzing}>{live.analyzing?<span className="spin"></span>:(live.analysis?"Rigenera da capo":"Trova i tagli")}</button>}
+        <button className="btn sm ghost danger" onClick={()=>onDelete(raw)}>Rimuovi</button>
+      </div>
+      {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
+      {live.tx && (<div className="tx"><p>{live.tx.text}</p><div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div></div>)}
+      {live.analyzing && !live.analysis && <div style={{marginTop:12,color:"var(--muted)",fontSize:13}}><span className="spin"></span> Il cervello sta leggendo la trascrizione…</div>}
+      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} onResilence={(th)=>onResilence(raw,th)} resilencing={!!live.resilencing} onStartSplit={(i)=>onStartSplit(raw,i)} onDoSplit={(i,at)=>onDoSplit(raw,i,at)} onCancelSplit={()=>onCancelSplit(raw)} words={live.words||[]} splitting={live.splitting} onUndo={()=>onUndo(raw)} onRedo={()=>onRedo(raw)} canUndo={!!live.canUndo} canRedo={!!live.canRedo} />}
+      {status==="error" && live.error && <div className="banner" style={{marginTop:10,marginBottom:0}}>{live.error}</div>}
+    </div>
+  );
+}
+
+function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
+  const [project,setProject]=useState(null);
+  const [link,setLink]=useState(""); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
+  const [live,setLive]=useState({}); const pollRef=useRef(null);
+  const [editing,setEditing]=useState(false); const [tempName,setTempName]=useState("");
+
+  async function load(){ try{ const d=await api("get",{projectId}); setProject(d.project); refreshStatuses(d.project);}catch(e){ setErr(e.message);} }
+  async function refreshStatuses(prj){
+    for(const r of ordered(prj.raws)){
+      try{ const s=await api("status",{driveFileId:r.driveFileId});
+        setLive(L=>({...L,[r.id]:{...(L[r.id]||{}),status:(s.status==="working"?((L[r.id]&&L[r.id].status==="working")?"working":"queued"):s.status),error:s.error}}));
+        if(s.status==="ready"){ try{ const a=await analyzeApi({driveFileId:r.driveFileId,peek:true}); if(a.analysis){ setLive(L=>({...L,[r.id]:{...L[r.id],analysis:a.analysis,canUndo:a.canUndo,canRedo:a.canRedo}})); triggerStream(r.driveFileId); } }catch(_){} }
+      }catch(_){}
+    }
+  }
+  useEffect(()=>{ load(); return ()=>{ if(pollRef.current) clearInterval(pollRef.current); }; },[projectId]);
+  useEffect(()=>{
+    if(pollRef.current) clearInterval(pollRef.current); if(!project) return;
+    if(!Object.values(live).some(v=>v.status==="working")) return;
+    pollRef.current=setInterval(async()=>{
+      for(const [rawId,v] of Object.entries(live)){
+        if(v.status!=="working") continue;
+        const raw=(project.raws||[]).find(r=>r.id===rawId); if(!raw) continue;
+        try{ const s=await api("status",{driveFileId:raw.driveFileId});
+          if(s.status==="ready"||s.status==="error") setLive(L=>({...L,[rawId]:{...L[rawId],status:s.status,error:s.error}}));
+        }catch(_){}
+      }
+    },5000);
+    return ()=>{ if(pollRef.current) clearInterval(pollRef.current); };
+  },[live,project]);
+
+  async function addRaw(){ if(!link.trim())return; setErr("");setBusy(true);
+    try{ const d=await api("addRaw",{projectId,link:link.trim()}); setProject(d.project); setLink("");}catch(e){setErr(e.message);} setBusy(false); }
+  async function move(raw,dir){ try{ const d=await api("reorderRaw",{projectId,rawId:raw.id,direction:dir}); setProject(d.project);}catch(e){setErr(e.message);} }
+  async function delRaw(raw){ if(!confirm("Rimuovere questo grezzo dal progetto?"))return; try{ const d=await api("deleteRaw",{projectId,rawId:raw.id}); setProject(d.project);}catch(e){setErr(e.message);} }
+  async function transcribe(raw){
+    setLive(L=>({...L,[raw.id]:{...(L[raw.id]||{}),status:"working",startedAt:Date.now(),tx:null,error:null,analysis:null}}));
+    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId})}); }
+    catch(e){ setLive(L=>({...L,[raw.id]:{...L[raw.id],status:"error",error:"Avvio non riuscito: "+e.message}})); }
+  }
+  async function viewTx(raw){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); setLive(L=>({...L,[raw.id]:{...L[raw.id],tx:d.transcript}}));}catch(e){ setErr(e.message);} }
+  async function analyze(raw){
+    const force = !!(live[raw.id] && live[raw.id].analysis);
+    if(force && !confirm("Rigenerare i tagli da capo con l’AI? Perderai le correzioni manuali fatte finora (tieni/taglia, silenzi e bordi).")) return;
+    setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:true}}));
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,force}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,analyzing:false,canUndo:d.canUndo,canRedo:d.canRedo}})); triggerStream(raw.driveFileId); }
+    catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:false}})); }
+  }
+  async function toggleDecision(raw,i){
+    setLive(L=>({...L,[raw.id]:{...L[raw.id],toggling:true}}));
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,toggle:i}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,toggling:false,canUndo:d.canUndo,canRedo:d.canRedo}})); }
+    catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],toggling:false}})); }
+  }
+  async function undoEdit(raw){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,undo:true}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo,splitting:null}})); }catch(e){ setErr(e.message); } }
+  async function redoEdit(raw){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,redo:true}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo,splitting:null}})); }catch(e){ setErr(e.message); } }
+  async function startSplit(raw,i){
+    let words = live[raw.id] && live[raw.id].words;
+    if(!words){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); words=(d.transcript&&d.transcript.words)||[]; setLive(L=>({...L,[raw.id]:{...L[raw.id],words}})); }catch(e){ setErr(e.message); return; } }
+    setLive(L=>({...L,[raw.id]:{...L[raw.id],splitting:i}}));
+  }
+  async function doSplit(raw,i,atTime){
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,split:{i,atTime}}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,splitting:null,canUndo:d.canUndo,canRedo:d.canRedo}})); }
+    catch(e){ setErr(e.message); }
+  }
+  function cancelSplit(raw){ setLive(L=>({...L,[raw.id]:{...L[raw.id],splitting:null}})); }
+  async function resilence(raw,threshold){
+    setLive(L=>({...L,[raw.id]:{...L[raw.id],resilencing:true}}));
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,silence:threshold}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,resilencing:false,canUndo:d.canUndo,canRedo:d.canRedo}})); }
+    catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],resilencing:false}})); }
+  }
+  async function approveAndEdit(raw){
+    try{ await api("approve",{driveFileId:raw.driveFileId}); }catch(_){}
+    onOpenEditor(raw);
+  }
+  async function saveName(){ const n=tempName.trim(); if(!n){setEditing(false);return;} try{ const d=await api("rename",{projectId,name:n}); setProject(d.project); setEditing(false);}catch(e){setErr(e.message);} }
+  async function deleteProject(){ if(!confirm("Cancellare l'intero progetto e le sue trascrizioni? L'operazione non è reversibile."))return; try{ await api("deleteProject",{projectId}); onDeleted();}catch(e){ setErr(e.message);} }
+  const liveFor=(raw)=>({...(live[raw.id]||{}),onView:()=>viewTx(raw)});
+
+  if(!project) return <div className="wrap"><div className="empty">{err?<div className="banner">{err}</div>:<div><span className="spin"></span> Carico il progetto…</div>}</div></div>;
+  const raws=ordered(project.raws);
+  return (
+    <div className="wrap">
+      <div className="top">
+        <span className="brand"><b>LHM</b> Video Editor</span>
+        <span className="crumb" onClick={onBack}>Progetti</span><span className="muted">/</span>
+        {editing
+          ? <span className="renamebar"><input className="field" value={tempName} autoFocus onChange={e=>setTempName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")saveName();if(e.key==="Escape")setEditing(false);}} /><button className="btn sm pri" onClick={saveName}>Salva</button><button className="btn sm ghost" onClick={()=>setEditing(false)}>Annulla</button></span>
+          : <><h1>{project.name}</h1><button className="btn sm ghost" onClick={()=>{setTempName(project.name);setEditing(true);}}>Rinomina</button><span className="grow"></span><button className="btn sm danger" onClick={deleteProject}>Elimina progetto</button></>
+        }
+      </div>
+      {err && <div className="banner">{err}</div>}
+      <div className="newbar">
+        <input className="field" placeholder="Incolla il link Drive del grezzo…" value={link} onChange={e=>setLink(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addRaw();}} />
+        <button className="btn pri" onClick={addRaw} disabled={busy||!link.trim()}>{busy?<span className="spin"></span>:"Aggiungi"}</button>
+      </div>
+      {raws.length===0
+        ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
+        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} onUndo={undoEdit} onRedo={redoEdit} live={liveFor(r)} />)}</div>}
+    </div>
+  );
+}
+
+function ProjectList({onOpen}){
+  const [projects,setProjects]=useState(null);
+  const [name,setName]=useState(""); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
+  async function load(){ try{ const d=await api("summaries"); setProjects(d.projects||[]);}catch(e){ setErr(e.message); setProjects([]);} }
+  useEffect(()=>{ load(); },[]);
+  async function create(){ if(!name.trim())return; setBusy(true);setErr("");
+    try{ const d=await api("create",{name:name.trim()}); setName(""); onOpen(d.project.id);}catch(e){setErr(e.message);} setBusy(false); }
+  async function del(p,ev){ ev.stopPropagation(); if(!confirm("Cancellare «"+p.name+"» e le sue trascrizioni? Non è reversibile."))return;
+    try{ await api("deleteProject",{projectId:p.id}); load();}catch(e){ setErr(e.message);} }
+  return (
+    <div className="wrap">
+      <div className="top"><span className="brand"><b>LHM</b> Video Editor</span><h1>Progetti</h1></div>
+      {err && <div className="banner">{err}</div>}
+      <div className="newbar">
+        <input className="field" placeholder="Nome del nuovo progetto (es. Alberto — buon esempio)" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")create();}} />
+        <button className="btn pri" onClick={create} disabled={busy||!name.trim()}>{busy?<span className="spin"></span>:"Nuovo progetto"}</button>
+      </div>
+      {projects===null
+        ? <div className="empty"><span className="spin"></span> Carico i progetti…</div>
+        : projects.length===0
+          ? <div className="empty"><h3>Nessun progetto</h3>Dai un nome qui sopra per crearne uno e iniziare.</div>
+          : <div className="stack">{projects.map(p=>(
+              <div key={p.id} className="card pcard">
+                <div className="body" onClick={()=>onOpen(p.id)}>
+                  <h3>{p.name}</h3>
+                  <div className="meta"><span>Creato il {fmtDate(p.createdAt)}</span><span className="pill">{p.rawCount||0} grezzi</span>{p.doneCount>0 && <span className="pill ok">{p.doneCount} trascritti</span>}</div>
+                </div>
+                <button className="btn sm ghost danger" onClick={(e)=>del(p,e)} title="Elimina progetto">Elimina</button>
+                <span className="chev" onClick={()=>onOpen(p.id)}>›</span>
+              </div>
+            ))}</div>}
+    </div>
+  );
+}
+
+function fmtMs(sec){ sec=Math.max(0,sec||0); const m=Math.floor(sec/60), ss=Math.floor(sec%60), ms=Math.floor((sec-Math.floor(sec))*1000); return m+":"+String(ss).padStart(2,"0")+"."+String(ms).padStart(3,"0"); }
+
+function Editor({driveFileId,name,onBack}){
+  const [analysis,setAnalysis]=useState(null);
+  const [hlsUrl,setHlsUrl]=useState(null);
+  const [phase,setPhase]=useState("loading");
+  const [err,setErr]=useState("");
+  const [playing,setPlaying]=useState(false);
+  const [t,setT]=useState(0); const [dur,setDur]=useState(0);
+  const [skipCuts,setSkipCuts]=useState(true);
+  const [canUndo,setCanUndo]=useState(false); const [canRedo,setCanRedo]=useState(false);
+  const [editKeep,setEditKeep]=useState([]);
+  const [drag,setDrag]=useState(null);
+  const [selected,setSelected]=useState(null); const [startStr,setStartStr]=useState(""); const [endStr,setEndStr]=useState("");
+  const videoRef=useRef(null); const pollRef=useRef(null); const hlsInst=useRef(null);
+  const timelineRef=useRef(null); const editKeepRef=useRef([]);
+  editKeepRef.current=editKeep;
+
+  useEffect(()=>{ init(); return ()=>{ if(pollRef.current) clearInterval(pollRef.current); if(hlsInst.current){ hlsInst.current.destroy(); hlsInst.current=null; } }; },[driveFileId]);
+  async function init(){
+    try{
+      const a=await analyzeApi({driveFileId,peek:true});
+      if(!a.analysis){ setErr("Nessun montaggio per questo video."); setPhase("error"); return; }
+      setAnalysis(a.analysis); setCanUndo(!!a.canUndo); setCanRedo(!!a.canRedo);
+      const st=await streamApi("status",driveFileId);
+      if(st.state==="ready" && st.hls){ setHlsUrl(st.hls); setPhase("ready"); }
+      else if(st.state==="error"){ setErr("Errore nella preparazione del video: "+(st.error||"")); setPhase("error"); }
+      else { setPhase("preparing"); triggerStream(driveFileId); poll(); }
+    }catch(e){ setErr(e.message); setPhase("error"); }
+  }
+  function poll(){ let n=0; pollRef.current=setInterval(async()=>{ n++; try{ const st=await streamApi("status",driveFileId);
+      if(st.state==="ready"&&st.hls){ clearInterval(pollRef.current); pollRef.current=null; setHlsUrl(st.hls); setPhase("ready"); return; }
+      if(st.state==="error"){ clearInterval(pollRef.current); pollRef.current=null; setErr("Errore nella preparazione del video: "+(st.error||"")); setPhase("error"); return; }
+    }catch(_){}
+    if(n>120){ clearInterval(pollRef.current); pollRef.current=null; setErr("La preparazione sta impiegando troppo. Riprova tra poco."); setPhase("error"); } },5000); }
+
+  async function retry(){
+    try{ await streamApi("reset",driveFileId); }catch(_){}
+    streamTriggered.delete(driveFileId);
+    setErr(""); setHlsUrl(null); setPhase("loading"); init();
+  }
+  async function resetManual(){ try{ const d=await analyzeApi({driveFileId,clearManual:true}); setSelected(null); setAnalysis(d.analysis); setCanUndo(!!d.canUndo); setCanRedo(!!d.canRedo); }catch(e){ setErr(e.message); } }
+  async function undoE(){ try{ const d=await analyzeApi({driveFileId,undo:true}); setSelected(null); setAnalysis(d.analysis); setCanUndo(!!d.canUndo); setCanRedo(!!d.canRedo); }catch(e){ setErr(e.message); } }
+  async function redoE(){ try{ const d=await analyzeApi({driveFileId,redo:true}); setSelected(null); setAnalysis(d.analysis); setCanUndo(!!d.canUndo); setCanRedo(!!d.canRedo); }catch(e){ setErr(e.message); } }
+
+  useEffect(()=>{ if(!analysis) return; const src=(analysis.keepManual&&analysis.keepManual.length)?analysis.keepManual:(analysis.keep||[]); setEditKeep(src.map(x=>({start:x.start,end:x.end}))); },[analysis]);
+
+  useEffect(()=>{
+    if(phase!=="ready" || !hlsUrl) return;
+    const v=videoRef.current; if(!v) return;
+    if(v.canPlayType("application/vnd.apple.mpegurl")){ v.src=hlsUrl; }
+    else if(window.Hls && window.Hls.isSupported()){ const h=new window.Hls(); h.loadSource(hlsUrl); h.attachMedia(v); hlsInst.current=h; }
+    else { v.src=hlsUrl; }
+    return ()=>{ if(hlsInst.current){ hlsInst.current.destroy(); hlsInst.current=null; } };
+  },[phase,hlsUrl]);
+
+  const totalDur=dur||(analysis&&analysis.duration)||0;
+  const keptDur=editKeep.reduce((s,k)=>s+(k.end-k.start),0);
+  function inKeep(time){ return editKeep.some(k=>time>=k.start-0.05 && time<k.end-0.02); }
+  function nextKeepStart(time){ const f=editKeep.find(k=>k.start>time-0.02); return f?f.start:null; }
+  function pc(x){ return totalDur? (Math.max(0,Math.min(100,x/totalDur*100))+"%") : "0%"; }
+
+  function onTime(){ const v=videoRef.current; if(!v) return; const time=v.currentTime; setT(time);
+    if(skipCuts && editKeep.length && !inKeep(time)){ const ns=nextKeepStart(time); if(ns!==null && ns>time){ v.currentTime=ns; } else { v.pause(); setPlaying(false); } } }
+  function startPoint(){ return (skipCuts && editKeep.length) ? editKeep[0].start : 0; }
+  function atEnd(){ const v=videoRef.current; if(!v) return false; if(v.ended) return true; const lastEnd=editKeep.length? editKeep[editKeep.length-1].end : totalDur; return totalDur>0 && v.currentTime >= (Math.min(lastEnd,totalDur)-0.08); }
+  function togglePlay(){ const v=videoRef.current; if(!v) return;
+    if(v.paused || v.ended){
+      if(atEnd()){ try{ v.currentTime=startPoint(); }catch(_){}; setT(startPoint()); }
+      else if(skipCuts && editKeep.length && !inKeep(v.currentTime)){ const ns=nextKeepStart(v.currentTime); v.currentTime=(ns!==null?ns:startPoint()); }
+      const pr=v.play(); if(pr&&pr.catch) pr.catch(()=>{}); setPlaying(true);
+    } else { v.pause(); setPlaying(false); } }
+  function seekAt(e){ const v=videoRef.current; if(!v||!totalDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; const time=Math.max(0,Math.min(totalDur-0.05,p*totalDur)); try{ v.currentTime=time; }catch(_){}; setT(time); if(v.ended) setPlaying(false); }
+
+  async function saveKeep(keep){ try{ const d=await analyzeApi({driveFileId,setKeep:keep}); setCanUndo(!!d.canUndo); setCanRedo(!!d.canRedo); }catch(_){} }
+  useEffect(()=>{
+    if(!drag) return;
+    function move(e){
+      if(!timelineRef.current) return;
+      const rect=timelineRef.current.getBoundingClientRect();
+      const time=Math.max(0,Math.min(totalDur,((e.clientX-rect.left)/rect.width)*totalDur));
+      setEditKeep(prev=>{
+        const arr=prev.map(x=>({...x})); const iv=arr[drag.idx]; if(!iv) return prev; const MIN=0.1;
+        if(drag.edge==="left"){ const lo=drag.idx>0?arr[drag.idx-1].end+0.02:0; iv.start=Math.max(lo,Math.min(time,iv.end-MIN)); }
+        else { const hi=drag.idx<arr.length-1?arr[drag.idx+1].start-0.02:totalDur; iv.end=Math.min(hi,Math.max(time,iv.start+MIN)); }
+        return arr;
+      });
+    }
+    function up(){ setDrag(null); saveKeep(editKeepRef.current); }
+    window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+    return ()=>{ window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",up); };
+  },[drag,totalDur]);
+
+  useEffect(()=>{ if(selected!=null){ const iv=editKeepRef.current[selected]; if(iv){ setStartStr(fmtMs(iv.start)); setEndStr(fmtMs(iv.end)); } } },[selected]);
+  function parseTime(str){ str=String(str).trim(); if(str.indexOf(":")>=0){ const parts=str.split(":"); return (parseFloat(parts[0])||0)*60 + (parseFloat(parts[1])||0); } return parseFloat(str); }
+  function selectInterval(i){ setSelected(i); const iv=editKeepRef.current[i]; const v=videoRef.current; if(iv&&v){ v.currentTime=iv.start; setT(iv.start); } }
+  function applyEdit(){
+    const ns=parseTime(startStr), ne=parseTime(endStr);
+    if(isNaN(ns)||isNaN(ne)||ne<=ns){ setErr("Tempi non validi: usa minuti:secondi.millesimi, es. 1:07.500"); return; }
+    setErr("");
+    setEditKeep(prev=>{ const arr=prev.map(x=>({...x})); const iv=arr[selected]; if(!iv) return prev;
+      const lo=selected>0?arr[selected-1].end+0.02:0; const hi=selected<arr.length-1?arr[selected+1].start-0.02:totalDur;
+      iv.start=Math.max(lo,Math.min(ns,ne-0.1)); iv.end=Math.min(hi,Math.max(ne,iv.start+0.1)); saveKeep(arr); return arr; });
+  }
+  function delInterval(){ setEditKeep(prev=>{ const arr=prev.filter((_,i)=>i!==selected); saveKeep(arr); return arr; }); setSelected(null); }
+
+  return (
+    <div className="wrap">
+      <div className="top">
+        <span className="brand"><b>LHM</b> Video Editor</span>
+        <span className="crumb" onClick={onBack}>‹ Torna a tagli e script</span><span className="muted">/</span>
+        <h1>Anteprima montaggio</h1>
+      </div>
+      <div style={{fontSize:14,color:"var(--muted)",marginBottom:14}}>{name||driveFileId}</div>
+      {err && <div className="banner">{err}</div>}
+      {phase==="error" && <div style={{marginBottom:16}}><button className="btn pri" onClick={retry}>Riprova la preparazione</button></div>}
+      {phase==="loading" && <div className="empty"><span className="spin"></span> Carico…</div>}
+      {phase==="preparing" && <div className="empty"><span className="spin"></span> Preparo il video su Cloudflare Stream… la prima volta può richiedere qualche minuto.</div>}
+      {phase==="ready" && (
+        <div>
+          <div className="vwrap"><video ref={videoRef} playsInline onLoadedMetadata={e=>setDur(e.currentTarget.duration||0)} onTimeUpdate={onTime} onEnded={()=>setPlaying(false)} /></div>
+          <div className="ctrls">
+            <button className="btn pri" onClick={togglePlay}>{playing?"Pausa":"Play"}</button>
+            <span className="time">{fmtMs(t)} / {fmtMs(totalDur)}</span>
+            <button className={"btn sm"+(skipCuts?" pri":"")} title="Se attivo, la riproduzione salta le parti tagliate" onClick={()=>setSkipCuts(v=>!v)}>{skipCuts?"Salta i tagli ✓":"Mostra anche i tagli"}</button>
+            <button className="btn sm ghost" disabled={!canUndo} title="Annulla" onClick={undoE}>↶</button>
+            <button className="btn sm ghost" disabled={!canRedo} title="Ripeti" onClick={redoE}>↷</button>
+            {analysis && analysis.keepManual && analysis.keepManual.length>0 && <button className="btn sm ghost" title="Scarta le tue modifiche manuali dei bordi e torna ai tagli calcolati" onClick={resetManual}>Riparti dai tagli automatici</button>}
+            <span className="grow"></span>
+            <span className="time">Montato: {fmtMs(keptDur)}</span>
+          </div>
+          {totalDur>0 && <div className="tl" ref={timelineRef} onClick={seekAt}>
+            {editKeep.map((k,i)=>(
+              <div key={i} className={"k"+(selected===i?" sel":"")} style={{left:pc(k.start),width:pc(k.end-k.start)}} onClick={(e)=>{e.stopPropagation(); selectInterval(i);}}>
+                <div className="h l" onMouseDown={(e)=>{e.stopPropagation(); setDrag({idx:i,edge:"left"});}} onClick={(e)=>e.stopPropagation()}></div>
+                <div className="h r" onMouseDown={(e)=>{e.stopPropagation(); setDrag({idx:i,edge:"right"});}} onClick={(e)=>e.stopPropagation()}></div>
+              </div>
+            ))}
+            <div className="ph" style={{left:pc(t)}}></div>
+          </div>}
+          <div className="tlhint">Trascina i bordi delle zone blu per spostare i tagli. Clicca sul nero (o attiva “Mostra anche i tagli”) per ispezionare cosa è stato tolto.</div>
+          {selected!=null && editKeep[selected] && (
+            <div className="edpanel">
+              <span className="mono" style={{fontWeight:600}}>Zona {selected+1}</span>
+              <label>Inizio <input className="tinput" value={startStr} onChange={e=>setStartStr(e.target.value)} /></label>
+              <label>Fine <input className="tinput" value={endStr} onChange={e=>setEndStr(e.target.value)} /></label>
+              <button className="btn sm pri" onClick={applyEdit}>Applica</button>
+              <button className="btn sm ghost danger" onClick={delInterval}>Elimina zona</button>
+              <button className="btn sm ghost" onClick={()=>setSelected(null)}>Chiudi</button>
+            </div>
+          )}
+          <div className="legend"><span><i style={{background:"var(--accent)"}}></i>Tenuto</span><span><i style={{background:"#20242B"}}></i>Tagliato</span></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function App(){
+  const [openId,setOpenId]=useState(null);
+  const [editor,setEditor]=useState(null);
+  if(editor) return <Editor driveFileId={editor.driveFileId} name={editor.name} onBack={()=>setEditor(null)} />;
+  return openId
+    ? <ProjectView projectId={openId} onBack={()=>setOpenId(null)} onDeleted={()=>setOpenId(null)} onOpenEditor={(raw)=>setEditor({driveFileId:raw.driveFileId,name:raw.name})} />
+    : <ProjectList onOpen={setOpenId} />;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
