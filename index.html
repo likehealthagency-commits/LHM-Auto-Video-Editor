@@ -119,6 +119,12 @@
   .edpanel label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
   .tinput{font-family:"IBM Plex Mono";font-size:13px;width:104px;padding:6px 8px;border:1px solid var(--line);border-radius:7px}
   .tinput:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+  .audiobar{display:flex;align-items:center;gap:10px;margin:2px 0 12px}
+  .cut.active{outline:2px solid var(--accent);outline-offset:-1px;background:var(--accent-wash)}
+  .cut .tc{cursor:pointer}
+  .forcebox{margin-top:18px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:#FAFBFC}
+  .forcerow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
+  .forcemsg{margin-top:8px;font-size:13px;color:var(--accent-ink)}
   .tl .k.sel{outline:2px solid #fff;outline-offset:-1px}
   .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:8px}
   .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
@@ -157,6 +163,8 @@ async function analyzeApi(body){
   const res=await fetch(ANALYZE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||("Errore "+res.status)); return data;
 }
+async function forceApi(driveFileId,start,end){ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId,forceRange:{start,end}})}); }
+function parseClock(str){ str=String(str||"").trim(); if(!str) return NaN; if(str.indexOf(":")>=0){ const a=str.split(":"); return (parseFloat(a[0])||0)*60+(parseFloat(a[1])||0); } return parseFloat(str); }
 function fmtDate(iso){ try{ return new Date(iso).toLocaleDateString("it-IT",{day:"numeric",month:"short",year:"numeric"});}catch(_){return "";} }
 function fmtTC(sec){ sec=Math.max(0,Math.round(sec||0)); const m=Math.floor(sec/60), s=sec%60; return m+":"+String(s).padStart(2,"0"); }
 function ordered(raws){ return (raws||[]).slice().sort((a,b)=>(a.order||0)-(b.order||0)); }
@@ -175,6 +183,27 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   const [copied,setCopied]=useState(false);
   function copy(){ try{ navigator.clipboard.writeText(data.cleanScript); setCopied(true); setTimeout(()=>setCopied(false),1500);}catch(_){}}
   function segWords(d){ return (words||[]).filter(w=> w.start>=d.start-0.01 && w.start<d.end+0.01).sort((a,b)=>a.start-b.start); }
+  const audioRef=useRef(null);
+  const [audioUrl,setAudioUrl]=useState(null); const [aPlaying,setAPlaying]=useState(false); const [aT,setAT]=useState(0);
+  const [fStart,setFStart]=useState(""); const [fEnd,setFEnd]=useState(""); const [fMsg,setFMsg]=useState(""); const [fBusy,setFBusy]=useState(false);
+  async function loadAudio(){ if(audioUrl) return audioUrl; try{ const d=await api("audioUrl",{driveFileId:data.driveFileId}); if(!d.url){ setFMsg("Audio non disponibile: ri-trascrivi il video intero."); return null; } setAudioUrl(d.url); return d.url; }catch(e){ setFMsg("Audio non disponibile."); return null; } }
+  async function toggleAudio(){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } if(a.paused){ a.play().catch(()=>{}); setAPlaying(true); } else { a.pause(); setAPlaying(false); } }
+  async function seekAudio(t){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } try{ a.currentTime=t; }catch(_){}; setAT(t); a.play().catch(()=>{}); setAPlaying(true); }
+  function isActive(d){ return aT>=d.start-0.02 && aT<d.end; }
+  async function doForce(){
+    const sc=parseClock(fStart), ec=parseClock(fEnd);
+    if(isNaN(sc)||isNaN(ec)||ec<=sc){ setFMsg("Intervallo non valido: usa il formato m:ss (es. 0:52)."); return; }
+    setFBusy(true); setFMsg("Ri-trascrizione dell'intervallo in corso… (~20-40 secondi)");
+    try{
+      await forceApi(data.driveFileId, sc, ec);
+      let done=null;
+      for(let i=0;i<30 && !done;i++){ await new Promise(r=>setTimeout(r,3000)); try{ const d=await api("forceStatus",{driveFileId:data.driveFileId}); if(d.status && d.status.done) done=d.status; }catch(_){} }
+      if(done && done.error) setFMsg("Errore: "+done.error);
+      else if(done) setFMsg("Fatto: aggiunte "+(done.addedWords||0)+" parole in quell'intervallo. Premi “Rigenera da capo” per rivederle nei tagli.");
+      else setFMsg("Sta impiegando piu' del previsto: attendi ancora e poi rigenera i tagli.");
+    }catch(e2){ setFMsg("Errore: "+e2.message); }
+    setFBusy(false);
+  }
   return (
     <div className="analysis">
       <div className="asum">
@@ -195,12 +224,17 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
       <div className="lbl">Script pulito</div>
       <div className="scriptbox">{data.cleanScript}</div>
       <div style={{marginTop:8,display:"flex",gap:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button><button className="btn sm pri" onClick={onApprove}>Approva e apri l’editor</button></div>
+      <div className="audiobar">
+        <button className="btn sm" onClick={toggleAudio}>{aPlaying?"⏸ Pausa":"▶ Ascolta l'audio"}</button>
+        <span className="mono" style={{fontSize:12,color:"var(--muted)"}}>{fmtTC(aT)}</span>
+        <audio ref={audioRef} onTimeUpdate={e=>setAT(e.currentTarget.currentTime||0)} onEnded={()=>setAPlaying(false)} style={{display:"none"}}></audio>
+      </div>
       <div className="lbl">Lista tagli</div>
       <div>
         {data.decisions.map(d=>(
           <div key={d.i}>
-            <div className={"cut "+d.action}>
-              <div className="tc">{fmtTC(d.start)} – {fmtTC(d.end)}</div>
+            <div className={"cut "+d.action+(isActive(d)?" active":"")}>
+              <div className="tc" onClick={()=>seekAudio(d.start)} title="Ascolta da qui">{fmtTC(d.start)} – {fmtTC(d.end)}</div>
               <div className="bd">
                 <div className="txt">{d.text}</div>
                 {d.reason && <div className="rs">{d.reason}</div>}
@@ -224,6 +258,15 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
             )}
           </div>
         ))}
+      </div>
+      <div className="forcebox">
+        <div className="lbl">Manca un pezzo? Forza la trascrizione di un intervallo</div>
+        <div className="forcerow">
+          <label>Da <input className="tinput" placeholder="m:ss" value={fStart} onChange={e=>setFStart(e.target.value)} /></label>
+          <label>A <input className="tinput" placeholder="m:ss" value={fEnd} onChange={e=>setFEnd(e.target.value)} /></label>
+          <button className="btn sm pri" disabled={fBusy} onClick={doForce}>{fBusy?"In corso…":"Forza trascrizione"}</button>
+        </div>
+        {fMsg && <div className="forcemsg">{fMsg}</div>}
       </div>
     </div>
   );
@@ -458,10 +501,15 @@ function Editor({driveFileId,name,onBack}){
 
   function onTime(){ const v=videoRef.current; if(!v) return; const time=v.currentTime; setT(time);
     if(skipCuts && editKeep.length && !inKeep(time)){ const ns=nextKeepStart(time); if(ns!==null && ns>time){ v.currentTime=ns; } else { v.pause(); setPlaying(false); } } }
+  function startPoint(){ return (skipCuts && editKeep.length) ? editKeep[0].start : 0; }
+  function atEnd(){ const v=videoRef.current; if(!v) return false; if(v.ended) return true; const lastEnd=editKeep.length? editKeep[editKeep.length-1].end : totalDur; return totalDur>0 && v.currentTime >= (Math.min(lastEnd,totalDur)-0.08); }
   function togglePlay(){ const v=videoRef.current; if(!v) return;
-    if(v.paused){ if(skipCuts && editKeep.length && !inKeep(v.currentTime)){ const ns=nextKeepStart(v.currentTime); v.currentTime=(ns!==null?ns:(editKeep.length?editKeep[0].start:0)); } v.play(); setPlaying(true); }
-    else { v.pause(); setPlaying(false); } }
-  function seekAt(e){ const v=videoRef.current; if(!v||!totalDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; const time=Math.max(0,Math.min(totalDur,p*totalDur)); v.currentTime=time; setT(time); }
+    if(v.paused || v.ended){
+      if(atEnd()){ try{ v.currentTime=startPoint(); }catch(_){}; setT(startPoint()); }
+      else if(skipCuts && editKeep.length && !inKeep(v.currentTime)){ const ns=nextKeepStart(v.currentTime); v.currentTime=(ns!==null?ns:startPoint()); }
+      const pr=v.play(); if(pr&&pr.catch) pr.catch(()=>{}); setPlaying(true);
+    } else { v.pause(); setPlaying(false); } }
+  function seekAt(e){ const v=videoRef.current; if(!v||!totalDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; const time=Math.max(0,Math.min(totalDur-0.05,p*totalDur)); try{ v.currentTime=time; }catch(_){}; setT(time); if(v.ended) setPlaying(false); }
 
   async function saveKeep(keep){ try{ const d=await analyzeApi({driveFileId,setKeep:keep}); setCanUndo(!!d.canUndo); setCanRedo(!!d.canRedo); }catch(_){} }
   useEffect(()=>{
