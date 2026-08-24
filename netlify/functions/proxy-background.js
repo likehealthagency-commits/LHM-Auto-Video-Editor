@@ -30,9 +30,10 @@ function makeProxy(token, driveFileId, outPath){
       "-y",
       "-headers", "Authorization: Bearer " + token + "\r\n",
       "-i", url,
-      "-vf", "scale=-2:480",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "96k",
+      "-vf", "scale=-2:360,fps=12",
+      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-pix_fmt", "yuv420p",
+      "-threads", "0",
+      "-c:a", "aac", "-b:a", "80k",
       "-movflags", "+faststart",
       outPath
     ]);
@@ -74,7 +75,7 @@ exports.handler = async (event) => {
   try{
     const sa=JSON.parse(process.env.GOOGLE_SA_JSON);
     const token=await getSaToken(sa, "https://www.googleapis.com/auth/drive");
-    console.log("Genero proxy 480p per "+driveFileId+"...");
+    console.log("Genero proxy 360p/12fps per "+driveFileId+"...");
     await makeProxy(token, driveFileId, out);
     const buf=fs.readFileSync(out);
     console.log("Proxy "+(buf.length/1048576).toFixed(2)+" MB -> R2...");
