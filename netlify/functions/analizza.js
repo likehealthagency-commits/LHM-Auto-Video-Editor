@@ -159,6 +159,37 @@ async function analyze(driveFileId){
   return a;
 }
 
+function hkey(id){ return "analyses/"+id+".history.json"; }
+async function pushHistory(id, snapshot){
+  const h=(await r2GetJson(hkey(id)))||{undo:[],redo:[]};
+  h.undo=h.undo||[]; h.undo.push(snapshot);
+  while(h.undo.length>40) h.undo.shift();
+  h.redo=[];
+  await r2PutJson(hkey(id), h);
+}
+async function respondWith(id, analysis){
+  const h=(await r2GetJson(hkey(id)))||{undo:[],redo:[]};
+  return ok({ analysis, canUndo:!!(h.undo&&h.undo.length>0), canRedo:!!(h.redo&&h.redo.length>0) });
+}
+async function actUndo(id){
+  const h=(await r2GetJson(hkey(id)))||{undo:[],redo:[]};
+  const cur=await r2GetJson("analyses/"+id+".json");
+  if(!h.undo || h.undo.length===0) return ok({ analysis:cur, canUndo:false, canRedo:!!(h.redo&&h.redo.length>0) });
+  const prev=h.undo.pop(); h.redo=h.redo||[]; if(cur) h.redo.push(cur);
+  await r2PutJson(hkey(id), h);
+  await r2PutJson("analyses/"+id+".json", prev);
+  return ok({ analysis:prev, canUndo:h.undo.length>0, canRedo:h.redo.length>0 });
+}
+async function actRedo(id){
+  const h=(await r2GetJson(hkey(id)))||{undo:[],redo:[]};
+  const cur=await r2GetJson("analyses/"+id+".json");
+  if(!h.redo || h.redo.length===0) return ok({ analysis:cur, canUndo:!!(h.undo&&h.undo.length>0), canRedo:false });
+  const next=h.redo.pop(); h.undo=h.undo||[]; if(cur) h.undo.push(cur);
+  await r2PutJson(hkey(id), h);
+  await r2PutJson("analyses/"+id+".json", next);
+  return ok({ analysis:next, canUndo:h.undo.length>0, canRedo:h.redo.length>0 });
+}
+
 function ok(obj){ return { statusCode:200, headers:{"Content-Type":"application/json"}, body:JSON.stringify(obj) }; }
 
 exports.handler = async (event) => {
@@ -170,13 +201,14 @@ exports.handler = async (event) => {
     if(p.toggle!==undefined && p.toggle!==null){
       const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata: esegui prima 'Trova i tagli'.");
       const dec=(a.decisions||[]).find(x=>x.i===p.toggle); if(!dec) throw new Error("Segmento non trovato.");
+      await pushHistory(id, JSON.parse(JSON.stringify(a)));
       dec.action=dec.action==="keep"?"discard":"keep";
       recompute(a);
       const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[]);
       delete a.keepManual; a.manualKeep=false;
       a.edited=true; a.editedAt=new Date().toISOString();
       await r2PutJson("analyses/"+id+".json", a);
-      return ok({analysis:a});
+      return await respondWith(id, a);
     }
     // divide un segmento in due parti al tempo indicato (per separare parte buona e ripetizione)
     if(p.split && p.split.i!==undefined && p.split.atTime!==undefined){
@@ -187,6 +219,7 @@ exports.handler = async (event) => {
       const ws=words.filter(w=> w.start>=seg.start-0.01 && w.start<seg.end+0.01).sort((x,y)=>x.start-y.start);
       const before=ws.filter(w=> w.start < atTime), after=ws.filter(w=> w.start >= atTime);
       if(before.length===0 || after.length===0) throw new Error("Punto di divisione non valido.");
+      await pushHistory(id, JSON.parse(JSON.stringify(a)));
       const partA={ i:seg.i, start:seg.start, end:before[before.length-1].end, text:before.map(w=>w.word).join(" "), action:seg.action, reason:"diviso a mano" };
       const partB={ i:seg.i, start:after[0].start, end:seg.end, text:after.map(w=>w.word).join(" "), action:seg.action, reason:"diviso a mano" };
       a.decisions.splice(idx,1,partA,partB);
@@ -195,37 +228,43 @@ exports.handler = async (event) => {
       recompute(a); applySilence(a, words);
       delete a.keepManual; a.manualKeep=false; a.edited=true;
       await r2PutJson("analyses/"+id+".json", a);
-      return ok({analysis:a});
+      return await respondWith(id, a);
     }
     // ricalcola solo i tagli dei silenzi con nuova soglia (senza LLM)
     if(p.silence!==undefined && p.silence!==null){
       const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata: esegui prima 'Trova i tagli'.");
+      await pushHistory(id, JSON.parse(JSON.stringify(a)));
       a.silenceThreshold=+p.silence;
       if(!a.keepRaw) recompute(a);
       const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[]);
       delete a.keepManual; a.manualKeep=false;
       await r2PutJson("analyses/"+id+".json", a);
-      return ok({analysis:a});
+      return await respondWith(id, a);
     }
     // salva un EDL modificato a mano (trascinamento bordi nell'editor)
     if(p.setKeep){
       const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
+      await pushHistory(id, JSON.parse(JSON.stringify(a)));
       a.keepManual=(Array.isArray(p.setKeep)?p.setKeep:[]).map(iv=>({start:+iv.start,end:+iv.end})).filter(iv=> iv.end>iv.start+0.02).sort((x,y)=>x.start-y.start);
       a.manualKeep=true;
       await r2PutJson("analyses/"+id+".json", a);
-      return ok({analysis:a});
+      return await respondWith(id, a);
     }
     if(p.clearManual){
       const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
+      await pushHistory(id, JSON.parse(JSON.stringify(a)));
       delete a.keepManual; a.manualKeep=false;
       await r2PutJson("analyses/"+id+".json", a);
-      return ok({analysis:a});
+      return await respondWith(id, a);
     }
+    if(p.undo) return await actUndo(id);
+    if(p.redo) return await actRedo(id);
     const existing=await r2GetJson("analyses/"+id+".json");
-    if(p.peek) return ok({analysis:existing});
-    if(existing && !p.force) return ok({analysis:existing});
+    if(p.peek) return await respondWith(id, existing);
+    if(existing && !p.force) return await respondWith(id, existing);
+    if(existing) await pushHistory(id, JSON.parse(JSON.stringify(existing)));
     const a=await analyze(id);
-    return ok({analysis:a});
+    return await respondWith(id, a);
   }catch(e){
     return { statusCode:500, headers:{"Content-Type":"application/json"}, body:JSON.stringify({error:String((e&&e.message)||e)}) };
   }
