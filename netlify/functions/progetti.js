@@ -150,6 +150,24 @@ async function actDeleteRaw(p){
   return { project };
 }
 
+async function actStatus(p){
+  const id = p.driveFileId;
+  if(!id) throw new Error("driveFileId mancante.");
+  const t = await r2Fetch("GET", "transcripts/" + id + ".json", "");
+  if(t.ok) return { status: "ready" };
+  const e = await r2Fetch("GET", "errors/" + id + ".json", "");
+  if(e.ok){ let msg = ""; try { msg = (await e.json()).error || ""; } catch(_){}; return { status: "error", error: msg }; }
+  return { status: "working" };
+}
+
+async function actTranscript(p){
+  const id = p.driveFileId;
+  if(!id) throw new Error("driveFileId mancante.");
+  const data = await r2GetJson("transcripts/" + id + ".json");
+  if(!data) throw new Error("Trascrizione non ancora disponibile.");
+  return { transcript: data };
+}
+
 async function actDeleteProject(p){
   await r2Delete("projects/" + p.projectId + ".json");
   const idx = await readIndex();
@@ -170,6 +188,8 @@ exports.handler = async (event) => {
       case "addRaw":        out = await actAddRaw(p); break;
       case "reorderRaw":    out = await actReorderRaw(p); break;
       case "deleteRaw":     out = await actDeleteRaw(p); break;
+      case "status":        out = await actStatus(p); break;
+      case "transcript":    out = await actTranscript(p); break;
       case "deleteProject": out = await actDeleteProject(p); break;
       default: return { statusCode: 400, body: JSON.stringify({ error: "Azione sconosciuta: " + p.action }) };
     }
