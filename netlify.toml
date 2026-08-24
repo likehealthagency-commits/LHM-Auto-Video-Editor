@@ -8,3 +8,7 @@
 [functions."trascrivi-grezzo-background"]
   included_files = ["node_modules/ffmpeg-static/**"]
   external_node_modules = ["ffmpeg-static"]
+
+[functions."proxy-background"]
+  included_files = ["node_modules/ffmpeg-static/**"]
+  external_node_modules = ["ffmpeg-static"]

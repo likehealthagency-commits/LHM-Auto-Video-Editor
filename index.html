@@ -94,6 +94,15 @@
   @keyframes sp{to{transform:rotate(360deg)}}
   .muted{color:var(--muted)}
   .renamebar{display:flex;gap:8px;align-items:center;flex:1}
+  .vwrap{background:#000;border-radius:10px;overflow:hidden;margin-top:6px}
+  .vwrap video{display:block;width:100%;max-height:58vh;background:#000}
+  .ctrls{display:flex;align-items:center;gap:14px;margin-top:12px}
+  .ctrls .time{font-family:"IBM Plex Mono";font-size:13px;color:var(--muted)}
+  .tl{position:relative;height:46px;background:#20242B;border-radius:8px;overflow:hidden;cursor:pointer;margin-top:14px}
+  .tl .k{position:absolute;top:0;bottom:0;background:linear-gradient(180deg,#6E8BF5,var(--accent))}
+  .tl .ph{position:absolute;top:-2px;bottom:-2px;width:2px;background:#fff;box-shadow:0 0 6px rgba(255,255,255,.9)}
+  .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:8px}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
 </style>
 </head>
 <body>
@@ -106,6 +115,7 @@ const { useState, useEffect, useRef } = React;
 const API="/.netlify/functions/progetti";
 const TRANSCRIBE="/.netlify/functions/trascrivi-grezzo-background";
 const ANALYZE="/.netlify/functions/analizza";
+const PROXY="/.netlify/functions/proxy-background";
 const EST_MS=150000;
 
 async function api(action,extra){
@@ -130,7 +140,7 @@ function Progress({startedAt}){
   return <div><div className="bar"><i style={{width:pct+"%"}}></i></div><div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div></div>;
 }
 
-function Analysis({data,onToggle,toggling}){
+function Analysis({data,onToggle,toggling,onApprove}){
   const [copied,setCopied]=useState(false);
   function copy(){ try{ navigator.clipboard.writeText(data.cleanScript); setCopied(true); setTimeout(()=>setCopied(false),1500);}catch(_){}}
   return (
@@ -142,7 +152,7 @@ function Analysis({data,onToggle,toggling}){
       </div>
       <div className="lbl">Script pulito</div>
       <div className="scriptbox">{data.cleanScript}</div>
-      <div style={{marginTop:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button></div>
+      <div style={{marginTop:8,display:"flex",gap:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button><button className="btn sm pri" onClick={onApprove}>Approva e apri l’editor</button></div>
       <div className="lbl">Lista tagli</div>
       <div>
         {data.decisions.map(d=>(
@@ -163,7 +173,7 @@ function Analysis({data,onToggle,toggling}){
   );
 }
 
-function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,live}){
+function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,live}){
   const status=live.status||raw.status||"queued";
   return (
     <div className="take">
@@ -185,13 +195,13 @@ function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,l
       {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
       {live.tx && (<div className="tx"><p>{live.tx.text}</p><div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div></div>)}
       {live.analyzing && !live.analysis && <div style={{marginTop:12,color:"var(--muted)",fontSize:13}}><span className="spin"></span> Il cervello sta leggendo la trascrizione…</div>}
-      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} />}
+      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} />}
       {status==="error" && live.error && <div className="banner" style={{marginTop:10,marginBottom:0}}>{live.error}</div>}
     </div>
   );
 }
 
-function ProjectView({projectId,onBack,onDeleted}){
+function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
   const [project,setProject]=useState(null);
   const [link,setLink]=useState(""); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
   const [live,setLive]=useState({}); const pollRef=useRef(null);
@@ -243,6 +253,10 @@ function ProjectView({projectId,onBack,onDeleted}){
     try{ const d=await analyzeApi({driveFileId:raw.driveFileId,toggle:i}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,toggling:false}})); }
     catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],toggling:false}})); }
   }
+  async function approveAndEdit(raw){
+    try{ await api("approve",{driveFileId:raw.driveFileId}); }catch(_){}
+    onOpenEditor(raw);
+  }
   async function saveName(){ const n=tempName.trim(); if(!n){setEditing(false);return;} try{ const d=await api("rename",{projectId,name:n}); setProject(d.project); setEditing(false);}catch(e){setErr(e.message);} }
   async function deleteProject(){ if(!confirm("Cancellare l'intero progetto e le sue trascrizioni? L'operazione non è reversibile."))return; try{ await api("deleteProject",{projectId}); onDeleted();}catch(e){ setErr(e.message);} }
   const liveFor=(raw)=>({...(live[raw.id]||{}),onView:()=>viewTx(raw)});
@@ -266,7 +280,7 @@ function ProjectView({projectId,onBack,onDeleted}){
       </div>
       {raws.length===0
         ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
-        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} live={liveFor(r)} />)}</div>}
+        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} live={liveFor(r)} />)}</div>}
     </div>
   );
 }
@@ -306,10 +320,78 @@ function ProjectList({onOpen}){
   );
 }
 
+function Editor({driveFileId,name,onBack}){
+  const [analysis,setAnalysis]=useState(null);
+  const [proxyUrl,setProxyUrl]=useState(null);
+  const [phase,setPhase]=useState("loading");
+  const [err,setErr]=useState("");
+  const [playing,setPlaying]=useState(false);
+  const [t,setT]=useState(0); const [dur,setDur]=useState(0);
+  const videoRef=useRef(null); const pollRef=useRef(null);
+
+  useEffect(()=>{ init(); return ()=>{ if(pollRef.current) clearInterval(pollRef.current); }; },[driveFileId]);
+  async function init(){
+    try{
+      const a=await analyzeApi({driveFileId,peek:true});
+      if(!a.analysis){ setErr("Nessun montaggio per questo video."); setPhase("error"); return; }
+      setAnalysis(a.analysis);
+      const st=await api("proxyStatus",{driveFileId});
+      if(st.status==="ready"){ await loadUrl(); }
+      else{ setPhase("preparing"); try{ await fetch(PROXY,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId})}); }catch(_){} pollProxy(); }
+    }catch(e){ setErr(e.message); setPhase("error"); }
+  }
+  function pollProxy(){ pollRef.current=setInterval(async()=>{ try{ const st=await api("proxyStatus",{driveFileId}); if(st.status==="ready"){ clearInterval(pollRef.current); pollRef.current=null; await loadUrl(); } }catch(_){} },5000); }
+  async function loadUrl(){ try{ const u=await api("proxyUrl",{driveFileId}); setProxyUrl(u.url); setPhase("ready"); }catch(e){ setErr(e.message); setPhase("error"); } }
+
+  const keep=(analysis&&analysis.keep)||[];
+  const totalDur=dur||(analysis&&analysis.duration)||0;
+  const keptDur=keep.reduce((s,k)=>s+(k.end-k.start),0);
+  function inKeep(time){ return keep.some(k=>time>=k.start-0.05 && time<k.end-0.02); }
+  function nextKeepStart(time){ const f=keep.find(k=>k.start>time-0.02); return f?f.start:null; }
+  function onTime(){ const v=videoRef.current; if(!v) return; const time=v.currentTime; setT(time);
+    if(keep.length && !inKeep(time)){ const ns=nextKeepStart(time); if(ns!==null && ns>time){ v.currentTime=ns; } else { v.pause(); setPlaying(false); } } }
+  function togglePlay(){ const v=videoRef.current; if(!v) return;
+    if(v.paused){ if(keep.length && !inKeep(v.currentTime)){ const ns=nextKeepStart(v.currentTime); v.currentTime=(ns!==null?ns:(keep.length?keep[0].start:0)); } v.play(); setPlaying(true); }
+    else { v.pause(); setPlaying(false); } }
+  function seekAt(e){ const v=videoRef.current; if(!v||!totalDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; let time=Math.max(0,Math.min(totalDur,p*totalDur)); if(keep.length && !inKeep(time)){ const ns=nextKeepStart(time); if(ns!==null) time=ns; } v.currentTime=time; setT(time); }
+
+  return (
+    <div className="wrap">
+      <div className="top">
+        <span className="brand"><b>LHM</b> Video Editor</span>
+        <span className="crumb" onClick={onBack}>‹ Torna</span><span className="muted">/</span>
+        <h1>Anteprima montaggio</h1>
+      </div>
+      <div style={{fontSize:14,color:"var(--muted)",marginBottom:14}}>{name||driveFileId}</div>
+      {err && <div className="banner">{err}</div>}
+      {phase==="loading" && <div className="empty"><span className="spin"></span> Carico…</div>}
+      {phase==="preparing" && <div className="empty"><span className="spin"></span> Preparo l’anteprima leggera… può richiedere un minuto.</div>}
+      {phase==="ready" && proxyUrl && (
+        <div>
+          <div className="vwrap"><video ref={videoRef} src={proxyUrl} playsInline onLoadedMetadata={e=>setDur(e.currentTarget.duration||0)} onTimeUpdate={onTime} onEnded={()=>setPlaying(false)} /></div>
+          <div className="ctrls">
+            <button className="btn pri" onClick={togglePlay}>{playing?"Pausa":"Play"}</button>
+            <span className="time">{fmtTC(t)} / {fmtTC(totalDur)}</span>
+            <span className="grow"></span>
+            <span className="time">Durata montata: {fmtTC(keptDur)}</span>
+          </div>
+          {totalDur>0 && <div className="tl" onClick={seekAt}>
+            {keep.map((k,i)=>(<div key={i} className="k" style={{left:(k.start/totalDur*100)+"%",width:((k.end-k.start)/totalDur*100)+"%"}}></div>))}
+            <div className="ph" style={{left:(t/totalDur*100)+"%"}}></div>
+          </div>}
+          <div className="legend"><span><i style={{background:"var(--accent)"}}></i>Tenuto (si vede)</span><span><i style={{background:"#20242B"}}></i>Tagliato (saltato)</span></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App(){
   const [openId,setOpenId]=useState(null);
+  const [editor,setEditor]=useState(null);
+  if(editor) return <Editor driveFileId={editor.driveFileId} name={editor.name} onBack={()=>setEditor(null)} />;
   return openId
-    ? <ProjectView projectId={openId} onBack={()=>setOpenId(null)} onDeleted={()=>setOpenId(null)} />
+    ? <ProjectView projectId={openId} onBack={()=>setOpenId(null)} onDeleted={()=>setOpenId(null)} onOpenEditor={(raw)=>setEditor({driveFileId:raw.driveFileId,name:raw.name})} />
     : <ProjectList onOpen={setOpenId} />;
 }
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
