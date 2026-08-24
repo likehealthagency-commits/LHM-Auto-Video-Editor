@@ -107,6 +107,7 @@
 </head>
 <body>
 <div id="root"></div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -115,7 +116,17 @@ const { useState, useEffect, useRef } = React;
 const API="/.netlify/functions/progetti";
 const TRANSCRIBE="/.netlify/functions/trascrivi-grezzo-background";
 const ANALYZE="/.netlify/functions/analizza";
-const PROXY="/.netlify/functions/proxy-background";
+const STREAM_INGEST="/.netlify/functions/stream-ingest";
+async function streamApi(action,driveFileId){
+  const res=await fetch(STREAM_INGEST,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,driveFileId})});
+  const d=await res.json().catch(()=>({})); if(!res.ok) throw new Error(d.error||("Errore "+res.status)); return d;
+}
+const streamTriggered=new Set();
+async function triggerStream(driveFileId){
+  if(streamTriggered.has(driveFileId)) return;
+  streamTriggered.add(driveFileId);
+  try{ const st=await streamApi("status",driveFileId); if(st.state!=="ready"){ streamApi("ingest",driveFileId); } }catch(_){}
+}
 const EST_MS=150000;
 
 async function api(action,extra){
@@ -212,7 +223,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
     for(const r of ordered(prj.raws)){
       try{ const s=await api("status",{driveFileId:r.driveFileId});
         setLive(L=>({...L,[r.id]:{...(L[r.id]||{}),status:(s.status==="working"?((L[r.id]&&L[r.id].status==="working")?"working":"queued"):s.status),error:s.error}}));
-        if(s.status==="ready"){ try{ const a=await analyzeApi({driveFileId:r.driveFileId,peek:true}); if(a.analysis) setLive(L=>({...L,[r.id]:{...L[r.id],analysis:a.analysis}})); }catch(_){} }
+        if(s.status==="ready"){ try{ const a=await analyzeApi({driveFileId:r.driveFileId,peek:true}); if(a.analysis){ setLive(L=>({...L,[r.id]:{...L[r.id],analysis:a.analysis}})); triggerStream(r.driveFileId); } }catch(_){} }
       }catch(_){}
     }
   }
@@ -245,7 +256,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
   async function analyze(raw){
     const force = !!(live[raw.id] && live[raw.id].analysis);
     setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:true}}));
-    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,force}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,analyzing:false}})); }
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,force}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,analyzing:false}})); triggerStream(raw.driveFileId); }
     catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:false}})); }
   }
   async function toggleDecision(raw,i){
@@ -322,26 +333,39 @@ function ProjectList({onOpen}){
 
 function Editor({driveFileId,name,onBack}){
   const [analysis,setAnalysis]=useState(null);
-  const [proxyUrl,setProxyUrl]=useState(null);
+  const [hlsUrl,setHlsUrl]=useState(null);
   const [phase,setPhase]=useState("loading");
   const [err,setErr]=useState("");
   const [playing,setPlaying]=useState(false);
   const [t,setT]=useState(0); const [dur,setDur]=useState(0);
-  const videoRef=useRef(null); const pollRef=useRef(null);
+  const videoRef=useRef(null); const pollRef=useRef(null); const hlsInst=useRef(null);
 
-  useEffect(()=>{ init(); return ()=>{ if(pollRef.current) clearInterval(pollRef.current); }; },[driveFileId]);
+  useEffect(()=>{ init(); return ()=>{ if(pollRef.current) clearInterval(pollRef.current); if(hlsInst.current){ hlsInst.current.destroy(); hlsInst.current=null; } }; },[driveFileId]);
   async function init(){
     try{
       const a=await analyzeApi({driveFileId,peek:true});
       if(!a.analysis){ setErr("Nessun montaggio per questo video."); setPhase("error"); return; }
       setAnalysis(a.analysis);
-      const st=await api("proxyStatus",{driveFileId});
-      if(st.status==="ready"){ await loadUrl(); }
-      else{ setPhase("preparing"); try{ await fetch(PROXY,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId})}); }catch(_){} pollProxy(); }
+      const st=await streamApi("status",driveFileId);
+      if(st.state==="ready" && st.hls){ setHlsUrl(st.hls); setPhase("ready"); }
+      else if(st.state==="error"){ setErr("Errore nella preparazione del video: "+(st.error||"")); setPhase("error"); }
+      else { setPhase("preparing"); triggerStream(driveFileId); poll(); }
     }catch(e){ setErr(e.message); setPhase("error"); }
   }
-  function pollProxy(){ pollRef.current=setInterval(async()=>{ try{ const st=await api("proxyStatus",{driveFileId}); if(st.status==="ready"){ clearInterval(pollRef.current); pollRef.current=null; await loadUrl(); } }catch(_){} },5000); }
-  async function loadUrl(){ try{ const u=await api("proxyUrl",{driveFileId}); setProxyUrl(u.url); setPhase("ready"); }catch(e){ setErr(e.message); setPhase("error"); } }
+  function poll(){ let n=0; pollRef.current=setInterval(async()=>{ n++; try{ const st=await streamApi("status",driveFileId);
+      if(st.state==="ready"&&st.hls){ clearInterval(pollRef.current); pollRef.current=null; setHlsUrl(st.hls); setPhase("ready"); return; }
+      if(st.state==="error"){ clearInterval(pollRef.current); pollRef.current=null; setErr("Errore nella preparazione del video: "+(st.error||"")); setPhase("error"); return; }
+    }catch(_){}
+    if(n>120){ clearInterval(pollRef.current); pollRef.current=null; setErr("La preparazione sta impiegando troppo. Riprova tra poco."); setPhase("error"); } },5000); }
+
+  useEffect(()=>{
+    if(phase!=="ready" || !hlsUrl) return;
+    const v=videoRef.current; if(!v) return;
+    if(v.canPlayType("application/vnd.apple.mpegurl")){ v.src=hlsUrl; }
+    else if(window.Hls && window.Hls.isSupported()){ const h=new window.Hls(); h.loadSource(hlsUrl); h.attachMedia(v); hlsInst.current=h; }
+    else { v.src=hlsUrl; }
+    return ()=>{ if(hlsInst.current){ hlsInst.current.destroy(); hlsInst.current=null; } };
+  },[phase,hlsUrl]);
 
   const keep=(analysis&&analysis.keep)||[];
   const totalDur=dur||(analysis&&analysis.duration)||0;
@@ -365,10 +389,10 @@ function Editor({driveFileId,name,onBack}){
       <div style={{fontSize:14,color:"var(--muted)",marginBottom:14}}>{name||driveFileId}</div>
       {err && <div className="banner">{err}</div>}
       {phase==="loading" && <div className="empty"><span className="spin"></span> Carico…</div>}
-      {phase==="preparing" && <div className="empty"><span className="spin"></span> Preparo l’anteprima leggera… può richiedere un minuto.</div>}
-      {phase==="ready" && proxyUrl && (
+      {phase==="preparing" && <div className="empty"><span className="spin"></span> Preparo il video su Cloudflare Stream… la prima volta può richiedere qualche minuto.</div>}
+      {phase==="ready" && (
         <div>
-          <div className="vwrap"><video ref={videoRef} src={proxyUrl} playsInline onLoadedMetadata={e=>setDur(e.currentTarget.duration||0)} onTimeUpdate={onTime} onEnded={()=>setPlaying(false)} /></div>
+          <div className="vwrap"><video ref={videoRef} playsInline onLoadedMetadata={e=>setDur(e.currentTarget.duration||0)} onTimeUpdate={onTime} onEnded={()=>setPlaying(false)} /></div>
           <div className="ctrls">
             <button className="btn pri" onClick={togglePlay}>{playing?"Pausa":"Play"}</button>
             <span className="time">{fmtTC(t)} / {fmtTC(totalDur)}</span>
