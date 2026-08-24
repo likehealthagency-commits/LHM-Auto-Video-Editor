@@ -221,7 +221,7 @@ function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,o
         <Chip status={status} />
         {status!=="working" && <button className="btn sm pri" onClick={()=>onTranscribe(raw)}>{status==="ready"?"Ritrascrivi":"Trascrivi"}</button>}
         {status==="ready" && <button className="btn sm" onClick={()=>live.onView(raw)}>Vedi trascrizione</button>}
-        {status==="ready" && <button className="btn sm" onClick={()=>onAnalyze(raw)} disabled={live.analyzing}>{live.analyzing?<span className="spin"></span>:(live.analysis?"Rianalizza tagli":"Trova i tagli")}</button>}
+        {status==="ready" && <button className="btn sm" onClick={()=>onAnalyze(raw)} disabled={live.analyzing}>{live.analyzing?<span className="spin"></span>:(live.analysis?"Rigenera da capo":"Trova i tagli")}</button>}
         <button className="btn sm ghost danger" onClick={()=>onDelete(raw)}>Rimuovi</button>
       </div>
       {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
@@ -276,6 +276,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
   async function viewTx(raw){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); setLive(L=>({...L,[raw.id]:{...L[raw.id],tx:d.transcript}}));}catch(e){ setErr(e.message);} }
   async function analyze(raw){
     const force = !!(live[raw.id] && live[raw.id].analysis);
+    if(force && !confirm("Rigenerare i tagli da capo con l’AI? Perderai le correzioni manuali fatte finora (tieni/taglia, silenzi e bordi).")) return;
     setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:true}}));
     try{ const d=await analyzeApi({driveFileId:raw.driveFileId,force}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,analyzing:false}})); triggerStream(raw.driveFileId); }
     catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],analyzing:false}})); }
@@ -397,8 +398,9 @@ function Editor({driveFileId,name,onBack}){
     streamTriggered.delete(driveFileId);
     setErr(""); setHlsUrl(null); setPhase("loading"); init();
   }
+  async function resetManual(){ try{ const d=await analyzeApi({driveFileId,clearManual:true}); setSelected(null); setAnalysis(d.analysis); }catch(e){ setErr(e.message); } }
 
-  useEffect(()=>{ if(analysis && Array.isArray(analysis.keep)) setEditKeep(analysis.keep.map(x=>({start:x.start,end:x.end}))); },[analysis]);
+  useEffect(()=>{ if(!analysis) return; const src=(analysis.keepManual&&analysis.keepManual.length)?analysis.keepManual:(analysis.keep||[]); setEditKeep(src.map(x=>({start:x.start,end:x.end}))); },[analysis]);
 
   useEffect(()=>{
     if(phase!=="ready" || !hlsUrl) return;
@@ -473,6 +475,7 @@ function Editor({driveFileId,name,onBack}){
             <button className="btn pri" onClick={togglePlay}>{playing?"Pausa":"Play"}</button>
             <span className="time">{fmtMs(t)} / {fmtMs(totalDur)}</span>
             <button className={"btn sm"+(skipCuts?" pri":"")} title="Se attivo, la riproduzione salta le parti tagliate" onClick={()=>setSkipCuts(v=>!v)}>{skipCuts?"Salta i tagli ✓":"Mostra anche i tagli"}</button>
+            {analysis && analysis.keepManual && analysis.keepManual.length>0 && <button className="btn sm ghost" title="Scarta le tue modifiche manuali dei bordi e torna ai tagli calcolati" onClick={resetManual}>Riparti dai tagli automatici</button>}
             <span className="grow"></span>
             <span className="time">Montato: {fmtMs(keptDur)}</span>
           </div>
