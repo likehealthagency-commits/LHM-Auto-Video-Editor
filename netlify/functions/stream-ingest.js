@@ -48,6 +48,7 @@ async function r2Fetch(method,key,bodyString){
 }
 async function r2GetJson(key){ const r=await r2Fetch("GET",key,""); if(r.status===404) return null; if(!r.ok) throw new Error("R2 get "+r.status); return r.json(); }
 async function r2PutJson(key,obj){ const r=await r2Fetch("PUT",key,JSON.stringify(obj,null,2)); if(!r.ok) throw new Error("R2 put "+r.status); return true; }
+async function r2Delete(key){ const r=await r2Fetch("DELETE",key,""); return r.ok || r.status===404; }
 
 // ---------- Cloudflare Stream ----------
 const CF_BASE = () => "https://api.cloudflare.com/client/v4/accounts/"+process.env.CF_ACCOUNT_ID+"/stream";
@@ -84,6 +85,8 @@ async function actStatus(driveFileId){
   const existing=await r2GetJson("stream/"+driveFileId+".json");
   if(!existing || !existing.uid) return { state:"none" };
   const v=await streamGet(existing.uid);
+  const state=(v.status && v.status.state) || "";
+  if(v.readyToStream || state==="inprogress" || state==="ready"){ try{ await r2Delete("sources/"+driveFileId+".mp4"); }catch(_){} }
   return {
     state: (v.status && v.status.state) || "unknown",
     ready: !!v.readyToStream,

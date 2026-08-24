@@ -220,6 +220,7 @@ async function actDeleteProject(p){
       try{ await r2Delete("proxies/" + r.driveFileId + ".mp4"); }catch(_){}
       try{ const sm=await r2GetJson("stream/"+r.driveFileId+".json"); if(sm&&sm.uid){ await fetch("https://api.cloudflare.com/client/v4/accounts/"+process.env.CF_ACCOUNT_ID+"/stream/"+sm.uid,{method:"DELETE",headers:{"Authorization":"Bearer "+process.env.STREAM_API_TOKEN}}); } }catch(_){}
       try{ await r2Delete("stream/"+r.driveFileId+".json"); }catch(_){}
+      try{ await r2Delete("sources/"+r.driveFileId+".mp4"); }catch(_){}
     }
   }
   await r2Delete("projects/" + p.projectId + ".json");
