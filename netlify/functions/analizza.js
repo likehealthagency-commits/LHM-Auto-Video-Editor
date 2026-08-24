@@ -46,7 +46,7 @@ const SYSTEM = [
 "Il grezzo contiene: false partenze, frasi interrotte e subito riprese, ripetizioni dello stesso concetto (ri-registrazioni dello stesso pezzo), intercalari e sbavature.",
 "Il tuo compito: per OGNI segmento decidere se TENERLO (keep) o SCARTARLO (discard), per ottenere un montato lineare e pulito che mantenga il senso del discorso.",
 "Regole:",
-"- Quando lo stesso contenuto viene detto piu' volte (ri-registrazioni), TIENI la versione migliore e piu' completa (di solito l'ultima, piu' fluida) e SCARTA i tentativi precedenti.",
+"- RI-REGISTRAZIONI (regola importante): quando due o piu' segmenti dicono la STESSA cosa o quasi (la persona ha ripetuto la frase per dirla meglio), TIENI SEMPRE l'ULTIMA versione, cioe' quella piu' avanti nel tempo (id piu' alto), e SCARTA quelle precedenti. Chi ri-registra lo fa per correggersi: l'ultima ripetizione e' quasi sempre quella buona. NON tenere mai la prima di una serie di ripetizioni simili.",
 "- SCARTA false partenze, frasi troncate e riprese, ripetizioni evidenti, sbavature.",
 "- TIENI i segmenti che compongono il discorso finale coerente.",
 "- Nel DUBBIO, TIENI e spiega il dubbio nel motivo (meglio lasciare da rifinire a mano che perdere contenuto buono).",
@@ -150,6 +150,7 @@ exports.handler = async (event) => {
       dec.action=dec.action==="keep"?"discard":"keep";
       recompute(a);
       const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[]);
+      delete a.keepManual; a.manualKeep=false;
       a.edited=true; a.editedAt=new Date().toISOString();
       await r2PutJson("analyses/"+id+".json", a);
       return ok({analysis:a});
@@ -160,14 +161,21 @@ exports.handler = async (event) => {
       a.silenceThreshold=+p.silence;
       if(!a.keepRaw) recompute(a);
       const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[]);
+      delete a.keepManual; a.manualKeep=false;
       await r2PutJson("analyses/"+id+".json", a);
       return ok({analysis:a});
     }
     // salva un EDL modificato a mano (trascinamento bordi nell'editor)
     if(p.setKeep){
       const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
-      a.keep=(Array.isArray(p.setKeep)?p.setKeep:[]).map(iv=>({start:+iv.start,end:+iv.end})).filter(iv=> iv.end>iv.start+0.02).sort((x,y)=>x.start-y.start);
+      a.keepManual=(Array.isArray(p.setKeep)?p.setKeep:[]).map(iv=>({start:+iv.start,end:+iv.end})).filter(iv=> iv.end>iv.start+0.02).sort((x,y)=>x.start-y.start);
       a.manualKeep=true;
+      await r2PutJson("analyses/"+id+".json", a);
+      return ok({analysis:a});
+    }
+    if(p.clearManual){
+      const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
+      delete a.keepManual; a.manualKeep=false;
       await r2PutJson("analyses/"+id+".json", a);
       return ok({analysis:a});
     }
