@@ -99,6 +99,7 @@ async function bridge(driveFileId){
   console.log("Scarico da Drive e carico su R2 a pezzi...");
   const dl=await fetch("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(driveFileId)+"?alt=media&supportsAllDrives=true",{ headers:{ "Authorization":"Bearer "+token } });
   if(!dl.ok || !dl.body) throw new Error("Drive download "+dl.status);
+  console.log("Drive: download avviato (status "+dl.status+")");
 
   // multipart: init
   const initRes=await r2Req("POST", srcKey, {uploads:""}, "");
@@ -106,6 +107,7 @@ async function bridge(driveFileId){
   if(!initRes.ok) throw new Error("R2 init "+initRes.status+" "+initXml.slice(0,140));
   const uploadId=(initXml.match(/<UploadId>([^<]+)<\/UploadId>/)||[])[1];
   if(!uploadId) throw new Error("R2 uploadId mancante");
+  console.log("R2: multipart avviato");
 
   const PART=32*1024*1024; // 32 MB per pezzo (uguali tranne l'ultimo, come richiede R2)
   const parts=[]; let partNum=0; let buf=Buffer.alloc(0);
@@ -117,11 +119,14 @@ async function bridge(driveFileId){
       if(!pr.ok) throw new Error("R2 part "+partNum+" "+pr.status+" "+(await pr.text()).slice(0,120));
       const etag=pr.headers.get("etag");
       parts.push({ n:partNum, etag });
-      if(partNum % 5 === 0) console.log("Caricati "+partNum+" pezzi...");
+      console.log("R2: pezzo "+partNum+" caricato ("+Math.round((partNum*32))+" MB circa)");
     }
+    let downloaded=0, lastLog=0;
     while(true){
       const { done, value } = await reader.read();
       if(done) break;
+      downloaded += value.length;
+      if(downloaded - lastLog >= PART){ lastLog=downloaded; console.log("Drive: scaricati ~"+Math.round(downloaded/1048576)+" MB"); }
       buf = buf.length ? Buffer.concat([buf, Buffer.from(value)]) : Buffer.from(value);
       while(buf.length >= PART){ await put(buf.subarray(0,PART)); buf = buf.subarray(PART); }
     }
