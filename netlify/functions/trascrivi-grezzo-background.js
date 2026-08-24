@@ -156,15 +156,13 @@ async function transcribeHole(audioPath, g, duration){
 
 // riempie TUTTI i buchi di copertura (parlato senza testo), per avere la mappa COMPLETA
 async function fillTranscript(audioPath, duration, silences, words, segments){
-  if(!duration || duration<=0) return { words, segments, recovered:0, holesBefore:0, holesAfter:0 };
-  const holes0 = coverageHoles(words, duration, 0.35).filter(h=> h.end-h.start >= 0.5);
-  const holesBefore = holes0.filter(h=> silenceFraction(h,silences) < 0.9).reduce((a,h)=>a+(h.end-h.start),0);
-  // riempi ogni buco NON prevalentemente silenzioso (fino a 40), in due passate se serve
+  if(!duration || duration<=0) return { words, segments, recovered:0, holesBefore:0, holesAfter:0, holesList:[] };
+  const MINH=0.4, MAXSIL=0.97; // piu' aggressivo: riempie anche buchi corti o quasi-silenziosi
+  const suspect = function(hs){ return hs.filter(h=> h.end-h.start >= MINH && silenceFraction(h,silences) < MAXSIL); };
+  const holesBefore = suspect(coverageHoles(words, duration, 0.35)).reduce((a,h)=>a+(h.end-h.start),0);
   let allWords=words.slice(), allSegs=segments.slice(), recovered=0;
-  for(let pass=0; pass<2; pass++){
-    const holes = coverageHoles(allWords, duration, 0.35)
-      .filter(h=> h.end-h.start >= 0.5 && silenceFraction(h,silences) < 0.9)
-      .slice(0, 40);
+  for(let pass=0; pass<3; pass++){
+    const holes = suspect(coverageHoles(allWords, duration, 0.35)).slice(0, 50);
     if(holes.length===0) break;
     let any=false;
     for(const g of holes){
@@ -173,10 +171,9 @@ async function fillTranscript(audioPath, duration, silences, words, segments){
     }
     if(!any) break;
   }
-  const holesAfter = coverageHoles(allWords, duration, 0.35)
-    .filter(h=> h.end-h.start >= 0.5 && silenceFraction(h,silences) < 0.9)
-    .reduce((a,h)=>a+(h.end-h.start),0);
-  return { words: allWords, segments: allSegs, recovered, holesBefore, holesAfter };
+  const holesList = suspect(coverageHoles(allWords, duration, 0.35)).map(function(h){ return { start:+h.start.toFixed(2), end:+h.end.toFixed(2) }; });
+  const holesAfter = holesList.reduce((a,h)=>a+(h.end-h.start),0);
+  return { words: allWords, segments: allSegs, recovered, holesBefore, holesAfter, holesList };
 }
 
 function normW(x){ return String(x||"").toLowerCase().replace(/[\s.,!?;:"'’“”()\-]/g,""); }
@@ -389,7 +386,7 @@ exports.handler = async (event) => {
       console.log("Completo la mappa del trascritto (riempio i buchi con voce)...");
       const r = await fillTranscript(aud, duration, audioMap.silences, words, segments);
       words = r.words; segments = r.segments; recovered = r.recovered;
-      coverage = { duration: duration? +duration.toFixed(1) : null, holesBefore: +r.holesBefore.toFixed(1), holesAfter: +r.holesAfter.toFixed(1) };
+      coverage = { duration: duration? +duration.toFixed(1) : null, holesBefore: +r.holesBefore.toFixed(1), holesAfter: +r.holesAfter.toFixed(1), holes: r.holesList||[] };
       console.log("Copertura: parlato senza testo " + r.holesBefore.toFixed(1) + "s -> residuo " + r.holesAfter.toFixed(1) + "s (recuperati " + recovered + " pezzi)");
     } catch(e){ console.log("Completamento saltato:", String((e&&e.message)||e).slice(0,120)); }
 

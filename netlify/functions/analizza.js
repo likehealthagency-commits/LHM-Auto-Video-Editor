@@ -152,7 +152,7 @@ async function analyze(driveFileId){
     const action=dec.action==="discard"?"discard":"keep";
     return { i:s.id, start:s.start, end:s.end, text:s.text, action, reason:dec.reason||"" };
   });
-  const a={ version:2, createdAt:new Date().toISOString(), model:"gpt-4o-mini", driveFileId, source:tr.source||null, duration:tr.duration||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
+  const a={ version:2, createdAt:new Date().toISOString(), model:"gpt-4o-mini", driveFileId, source:tr.source||null, duration:tr.duration||null, coverage:tr.coverage||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
   recompute(a);
   applySilence(a, tr.words||[]);
   await r2PutJson("analyses/"+driveFileId+".json", a);
