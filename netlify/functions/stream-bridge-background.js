@@ -88,10 +88,16 @@ async function streamGet(uid){
 
 // ---------- il ponte ----------
 async function bridge(driveFileId){
-  // se esiste gia' una mappatura, non rifare il lavoro
-  const existing=await r2GetJson("stream/"+driveFileId+".json");
-  if(existing && existing.uid){ console.log("Mappatura Stream gia' presente, salto."); return; }
+  const mapKey="stream/"+driveFileId+".json";
+  let m=null; try{ m=await r2GetJson(mapKey); }catch(_){}
+  if(m && m.uid){ console.log("Gia' su Stream, salto."); return; }
+  if(m && m.preparing && m.at && (Date.now()-m.at) < 20*60*1000){ console.log("Preparazione gia' in corso, salto."); return; }
+  try{ await r2PutJson(mapKey, { preparing:true, at: Date.now() }); }catch(_){}
+  try{ await doBridge(driveFileId); }
+  catch(e){ try{ await r2PutJson(mapKey, { error: String((e&&e.message)||e).slice(0,200), at: Date.now() }); }catch(_){}; throw e; }
+}
 
+async function doBridge(driveFileId){
   const srcKey="sources/"+driveFileId+".mp4";
   const sa=JSON.parse(process.env.GOOGLE_SA_JSON);
   const token=await getSaToken(sa, "https://www.googleapis.com/auth/drive");

@@ -83,7 +83,9 @@ async function actIngest(driveFileId){
 }
 async function actStatus(driveFileId){
   const existing=await r2GetJson("stream/"+driveFileId+".json");
-  if(!existing || !existing.uid) return { state:"none" };
+  if(!existing) return { state:"none" };
+  if(existing.error) return { state:"error", error: existing.error };
+  if(!existing.uid) return { state:"preparing" };
   const v=await streamGet(existing.uid);
   const state=(v.status && v.status.state) || "";
   if(v.readyToStream || state==="inprogress" || state==="ready"){ try{ await r2Delete("sources/"+driveFileId+".mp4"); }catch(_){} }
@@ -95,6 +97,12 @@ async function actStatus(driveFileId){
   };
 }
 
+async function actReset(driveFileId){
+  try{ await r2Delete("stream/"+driveFileId+".json"); }catch(_){}
+  try{ await r2Delete("sources/"+driveFileId+".mp4"); }catch(_){}
+  return { ok:true };
+}
+
 exports.handler = async (event) => {
   if(event.httpMethod!=="POST") return { statusCode:405, body:"Method not allowed" };
   let p; try{ p=JSON.parse(event.body||"{}"); }catch(_){ return { statusCode:400, body:JSON.stringify({error:"JSON non valido"}) }; }
@@ -103,6 +111,7 @@ exports.handler = async (event) => {
     let out;
     if(p.action==="ingest") out=await actIngest(id);
     else if(p.action==="status") out=await actStatus(id);
+    else if(p.action==="reset") out=await actReset(id);
     else return { statusCode:400, body:JSON.stringify({error:"Azione sconosciuta"}) };
     return { statusCode:200, headers:{"Content-Type":"application/json"}, body:JSON.stringify(out) };
   }catch(e){
