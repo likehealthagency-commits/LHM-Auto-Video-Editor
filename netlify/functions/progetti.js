@@ -84,6 +84,38 @@ async function r2PutJson(key, obj){ const res = await r2Fetch("PUT", key, JSON.s
 async function r2Delete(key){ const res = await r2Fetch("DELETE", key, ""); if(!res.ok && res.status!==404) throw new Error("R2 del "+res.status); return true; }
 async function r2Exists(key){ const res = await r2Fetch("GET", key, ""); return res.ok; }
 
+function rfc3986(x){ return encodeURIComponent(x).replace(/[!*'()]/g,c=>"%"+c.charCodeAt(0).toString(16).toUpperCase()); }
+function r2PresignGet(key, expires){
+  const accessKey=process.env.R2_ACCESS_KEY_ID, secretKey=process.env.R2_SECRET_ACCESS_KEY;
+  const endpoint=process.env.R2_ENDPOINT, bucket=process.env.R2_BUCKET;
+  const host=endpoint.replace(/^https?:\/\//,"");
+  const region="auto", service="s3";
+  const amzDate=new Date().toISOString().replace(/[:-]|\.\d{3}/g,"");
+  const dateStamp=amzDate.slice(0,8);
+  const scope=dateStamp+"/"+region+"/"+service+"/aws4_request";
+  const canonicalUri="/"+bucket+"/"+key.split("/").map(rfc3986).join("/");
+  const params={ "X-Amz-Algorithm":"AWS4-HMAC-SHA256", "X-Amz-Credential":accessKey+"/"+scope, "X-Amz-Date":amzDate, "X-Amz-Expires":String(expires||21600), "X-Amz-SignedHeaders":"host" };
+  const cqs=Object.keys(params).sort().map(k=>rfc3986(k)+"="+rfc3986(params[k])).join("&");
+  const canonicalRequest=["GET",canonicalUri,cqs,"host:"+host+"\n","host","UNSIGNED-PAYLOAD"].join("\n");
+  const stringToSign=["AWS4-HMAC-SHA256",amzDate,scope,sha256hex(canonicalRequest)].join("\n");
+  const kSigning=hmac(hmac(hmac(hmac("AWS4"+secretKey,dateStamp),region),service),"aws4_request");
+  const signature=crypto.createHmac("sha256",kSigning).update(stringToSign,"utf8").digest("hex");
+  return endpoint+canonicalUri+"?"+cqs+"&X-Amz-Signature="+signature;
+}
+
+async function actApprove(p){
+  const a=await r2GetJson("analyses/"+p.driveFileId+".json");
+  if(!a) throw new Error("Nessuna analisi da approvare.");
+  a.approved=true; a.approvedAt=new Date().toISOString();
+  await r2PutJson("analyses/"+p.driveFileId+".json", a);
+  return { analysis:a };
+}
+async function actProxyStatus(p){ return { status: (await r2Exists("proxies/"+p.driveFileId+".mp4")) ? "ready" : "none" }; }
+async function actProxyUrl(p){
+  if(!(await r2Exists("proxies/"+p.driveFileId+".mp4"))) throw new Error("Anteprima non ancora pronta.");
+  return { url: r2PresignGet("proxies/"+p.driveFileId+".mp4", 21600) };
+}
+
 const INDEX_KEY = "projects/_index.json";
 async function readIndex(){ return (await r2GetJson(INDEX_KEY)) || { projects: [] }; }
 async function writeIndex(idx){ return r2PutJson(INDEX_KEY, idx); }
@@ -185,6 +217,7 @@ async function actDeleteProject(p){
       try{ await r2Delete("transcripts/" + r.driveFileId + ".json"); }catch(_){}
       try{ await r2Delete("errors/" + r.driveFileId + ".json"); }catch(_){}
       try{ await r2Delete("analyses/" + r.driveFileId + ".json"); }catch(_){}
+      try{ await r2Delete("proxies/" + r.driveFileId + ".mp4"); }catch(_){}
     }
   }
   await r2Delete("projects/" + p.projectId + ".json");
@@ -228,6 +261,9 @@ exports.handler = async (event) => {
       case "deleteProject": out = await actDeleteProject(p); break;
       case "status":        out = await actStatus(p); break;
       case "transcript":    out = await actTranscript(p); break;
+      case "approve":       out = await actApprove(p); break;
+      case "proxyStatus":   out = await actProxyStatus(p); break;
+      case "proxyUrl":      out = await actProxyUrl(p); break;
       default: return { statusCode:400, body: JSON.stringify({error:"Azione sconosciuta: "+p.action}) };
     }
     return { statusCode:200, headers:{"Content-Type":"application/json"}, body: JSON.stringify(out) };
