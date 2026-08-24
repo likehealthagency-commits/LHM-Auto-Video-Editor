@@ -115,6 +115,11 @@ async function actProxyUrl(p){
   if(!(await r2Exists("proxies/"+p.driveFileId+".mp4"))) throw new Error("Anteprima non ancora pronta.");
   return { url: r2PresignGet("proxies/"+p.driveFileId+".mp4", 21600) };
 }
+async function actAudioUrl(p){
+  if(!(await r2Exists("audio/"+p.driveFileId+".mp3"))) return { url:null };
+  return { url: r2PresignGet("audio/"+p.driveFileId+".mp3", 7200) };
+}
+async function actForceStatus(p){ return { status: (await r2GetJson("forced/"+p.driveFileId+".json")) || null }; }
 
 const INDEX_KEY = "projects/_index.json";
 async function readIndex(){ return (await r2GetJson(INDEX_KEY)) || { projects: [] }; }
@@ -223,6 +228,8 @@ async function actDeleteProject(p){
       try{ await r2Delete("stream/"+r.driveFileId+".json"); }catch(_){}
       try{ await r2Delete("sources/"+r.driveFileId+".mp4"); }catch(_){}
       try{ await r2Delete("sources/"+r.driveFileId+".lock"); }catch(_){}
+      try{ await r2Delete("audio/"+r.driveFileId+".mp3"); }catch(_){}
+      try{ await r2Delete("forced/"+r.driveFileId+".json"); }catch(_){}
     }
   }
   await r2Delete("projects/" + p.projectId + ".json");
@@ -269,6 +276,8 @@ exports.handler = async (event) => {
       case "approve":       out = await actApprove(p); break;
       case "proxyStatus":   out = await actProxyStatus(p); break;
       case "proxyUrl":      out = await actProxyUrl(p); break;
+      case "audioUrl":      out = await actAudioUrl(p); break;
+      case "forceStatus":   out = await actForceStatus(p); break;
       default: return { statusCode:400, body: JSON.stringify({error:"Azione sconosciuta: "+p.action}) };
     }
     return { statusCode:200, headers:{"Content-Type":"application/json"}, body: JSON.stringify(out) };

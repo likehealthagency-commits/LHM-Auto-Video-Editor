@@ -251,6 +251,69 @@ async function densifyTranscript(audioPath, duration, words, segments){
 // ---------- R2 ----------
 function hmac(key, str){ return crypto.createHmac("sha256", key).update(str, "utf8").digest(); }
 function sha256hex(str){ return crypto.createHash("sha256").update(str, "utf8").digest("hex"); }
+function sha256hexBuf(buf){ return crypto.createHash("sha256").update(buf).digest("hex"); }
+async function r2Request(method, objectKey, bodyBuf, contentType){
+  const accessKey=process.env.R2_ACCESS_KEY_ID, secretKey=process.env.R2_SECRET_ACCESS_KEY;
+  const endpoint=process.env.R2_ENDPOINT, bucket=process.env.R2_BUCKET;
+  const host=endpoint.replace(/^https?:\/\//,"");
+  const region="auto", service="s3";
+  const amzDate=new Date().toISOString().replace(/[:-]|\.\d{3}/g,"");
+  const dateStamp=amzDate.slice(0,8);
+  const canonicalUri="/"+bucket+"/"+objectKey.split("/").map(encodeURIComponent).join("/");
+  const payload = bodyBuf || Buffer.alloc(0);
+  const payloadHash = sha256hexBuf(payload);
+  const canonicalHeaders="host:"+host+"\n"+"x-amz-content-sha256:"+payloadHash+"\n"+"x-amz-date:"+amzDate+"\n";
+  const signedHeaders="host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest=[method,canonicalUri,"",canonicalHeaders,signedHeaders,payloadHash].join("\n");
+  const credentialScope=dateStamp+"/"+region+"/"+service+"/aws4_request";
+  const stringToSign=["AWS4-HMAC-SHA256",amzDate,credentialScope,sha256hex(canonicalRequest)].join("\n");
+  const kSigning=hmac(hmac(hmac(hmac("AWS4"+secretKey,dateStamp),region),service),"aws4_request");
+  const signature=crypto.createHmac("sha256",kSigning).update(stringToSign,"utf8").digest("hex");
+  const headers={ "Authorization":"AWS4-HMAC-SHA256 Credential="+accessKey+"/"+credentialScope+", SignedHeaders="+signedHeaders+", Signature="+signature, "x-amz-date":amzDate, "x-amz-content-sha256":payloadHash };
+  if(contentType && method!=="GET") headers["Content-Type"]=contentType;
+  return fetch(endpoint+canonicalUri, { method, headers, body:(method==="GET"?undefined:payload) });
+}
+async function putBinaryToR2(key, buf, ct){ const r=await r2Request("PUT", key, buf, ct||"application/octet-stream"); if(!r.ok) throw new Error("R2 putbin "+r.status); return true; }
+async function getBytesFromR2(key){ const r=await r2Request("GET", key, null); if(r.status===404) return null; if(!r.ok) throw new Error("R2 get "+r.status); return Buffer.from(await r.arrayBuffer()); }
+async function getJsonFromR2(key){ const b=await getBytesFromR2(key); if(!b) return null; try{ return JSON.parse(b.toString("utf8")); }catch(_){ return null; } }
+
+// FORZA: ri-trascrive un intervallo indicato a mano e lo fonde nella trascrizione
+async function handleForceRange(driveFileId, rs, re){
+  if(!(re>rs)) return { statusCode:400 };
+  try { await putToR2("forced/"+driveFileId+".json", JSON.stringify({ done:false, at:new Date().toISOString(), range:[rs,re] })); } catch(_){}
+  const audLocal="/tmp/forced_"+Date.now()+".mp3", slice="/tmp/fslice_"+Date.now()+".mp3";
+  try{
+    const abuf = await getBytesFromR2("audio/"+driveFileId+".mp3");
+    if(!abuf) throw new Error("Audio non disponibile: ri-trascrivi prima il video intero.");
+    fs.writeFileSync(audLocal, abuf);
+    const tr = await getJsonFromR2("transcripts/"+driveFileId+".json");
+    if(!tr) throw new Error("Trascrizione non trovata.");
+    const pad=0.3, start=Math.max(0, rs-pad), dur=Math.max(0.4,(re+pad)-start);
+    await extractSlice(audLocal, start, dur, slice);
+    const v = await whisperVerbose(slice);
+    const nw=(Array.isArray(v.words)?v.words:[]).map(w=>({ word:w.word, start:(w.start||0)+start, end:(w.end||0)+start })).filter(w=> w.start>=rs-0.1 && w.end<=re+0.2);
+    const ns=(Array.isArray(v.segments)?v.segments:[]).map(x=>({ start:(x.start||0)+start, end:(x.end||0)+start, text:(x.text||"").trim() })).filter(x=> x.start>=rs-0.2 && x.end<=re+0.3 && x.text);
+    try{fs.unlinkSync(slice);}catch(_){}
+    try{fs.unlinkSync(audLocal);}catch(_){}
+    const keepW=(tr.words||[]).filter(w=> !(w.start>=rs-0.05 && w.start<=re+0.05));
+    const keepS=(tr.segments||[]).filter(sg=> !(sg.start>=rs-0.3 && sg.start<=re+0.3));
+    const mergedW=keepW.concat(nw);
+    const mergedS=keepS.concat(ns.length?ns:(nw.length?[{ start:nw[0].start, end:nw[nw.length-1].end, text:nw.map(w=>w.word).join(" ") }]:[]));
+    const cleaned=cleanTranscript(mergedW, mergedS, tr.duration);
+    tr.words=cleaned.words; tr.segments=cleaned.segments; tr.text=cleaned.text; tr.forcedAt=new Date().toISOString();
+    await putToR2("transcripts/"+driveFileId+".json", JSON.stringify(tr,null,2));
+    await putToR2("forced/"+driveFileId+".json", JSON.stringify({ done:true, at:new Date().toISOString(), addedWords:nw.length, range:[rs,re] }));
+    console.log("Forzato "+rs.toFixed(1)+"-"+re.toFixed(1)+"s: +"+nw.length+" parole");
+    return { statusCode:200 };
+  }catch(e){
+    try{fs.unlinkSync(slice);}catch(_){}
+    try{fs.unlinkSync(audLocal);}catch(_){}
+    const msg=String((e&&e.message)||e).slice(0,200);
+    try{ await putToR2("forced/"+driveFileId+".json", JSON.stringify({ done:true, error:msg, at:new Date().toISOString() })); }catch(_){}
+    console.log("Forza ERRORE:", msg);
+    return { statusCode:500 };
+  }
+}
 async function putToR2(objectKey, bodyString){
   const accessKey=process.env.R2_ACCESS_KEY_ID, secretKey=process.env.R2_SECRET_ACCESS_KEY;
   const endpoint=process.env.R2_ENDPOINT, bucket=process.env.R2_BUCKET;
@@ -278,6 +341,10 @@ exports.handler = async (event) => {
   let body; try { body = JSON.parse(event.body || "{}"); } catch(_){ return { statusCode:400 }; }
   const driveFileId = body.driveFileId;
   if(!driveFileId) return { statusCode:400 };
+
+  if(body.forceRange && body.forceRange.start!=null && body.forceRange.end!=null){
+    return await handleForceRange(driveFileId, +body.forceRange.start, +body.forceRange.end);
+  }
 
   const aud = "/tmp/grezzo_" + Date.now() + ".mp3";
   let token;
@@ -326,6 +393,7 @@ exports.handler = async (event) => {
       console.log("Copertura: parlato senza testo " + r.holesBefore.toFixed(1) + "s -> residuo " + r.holesAfter.toFixed(1) + "s (recuperati " + recovered + " pezzi)");
     } catch(e){ console.log("Completamento saltato:", String((e&&e.message)||e).slice(0,120)); }
 
+    try { await putBinaryToR2("audio/"+driveFileId+".mp3", fs.readFileSync(aud), "audio/mpeg"); console.log("Audio salvato su R2 per l'ascolto."); } catch(e){ console.log("Salvataggio audio saltato:", String((e&&e.message)||e).slice(0,80)); }
     try { fs.unlinkSync(aud); } catch(_){}
 
     // pulizia finale: niente sovrapposizioni, niente parole duplicate, tempi entro la durata
