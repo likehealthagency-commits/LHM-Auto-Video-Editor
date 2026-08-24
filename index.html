@@ -72,6 +72,9 @@
   /* analisi / tagli */
   .analysis{margin-top:14px;border-top:1px solid var(--line);padding-top:14px}
   .asum{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .silrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-4px 0 14px}
+  .silinfo{font-size:12.5px;color:var(--muted)}
+  .silpresets{display:flex;gap:6px;flex-wrap:wrap}
   .asum .t{font-weight:600;font-size:14px}
   .tag{font-family:"IBM Plex Mono";font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:20px}
   .tag.keep{background:#1f9d6614;color:var(--keep)} .tag.discard{background:#e5484d14;color:var(--discard)}
@@ -126,7 +129,7 @@ const streamTriggered=new Set();
 async function triggerStream(driveFileId){
   if(streamTriggered.has(driveFileId)) return;
   streamTriggered.add(driveFileId);
-  try{ const st=await streamApi("status",driveFileId); if(st.state!=="ready"){ fetch(STREAM_BRIDGE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId})}); } }catch(_){}
+  try{ const st=await streamApi("status",driveFileId); if(st.state==="none"){ fetch(STREAM_BRIDGE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId})}); } }catch(_){}
 }
 const EST_MS=150000;
 
@@ -152,7 +155,7 @@ function Progress({startedAt}){
   return <div><div className="bar"><i style={{width:pct+"%"}}></i></div><div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div></div>;
 }
 
-function Analysis({data,onToggle,toggling,onApprove}){
+function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing}){
   const [copied,setCopied]=useState(false);
   function copy(){ try{ navigator.clipboard.writeText(data.cleanScript); setCopied(true); setTimeout(()=>setCopied(false),1500);}catch(_){}}
   return (
@@ -161,6 +164,14 @@ function Analysis({data,onToggle,toggling,onApprove}){
         <span className="t">Proposta di montaggio</span>
         <span className="tag keep">{data.stats.kept} da tenere</span>
         <span className="tag discard">{data.stats.discarded} da tagliare</span>
+      </div>
+      <div className="silrow">
+        <span className="silinfo">Silenzi tolti: {data.silenceCutSeconds!=null?("~"+data.silenceCutSeconds+"s"):"—"} · pause</span>
+        <span className="silpresets">
+          {[["Off",9999],["Leggero",1],["Medio",0.7],["Aggressivo",0.45]].map(o=>(
+            <button key={o[0]} className={"btn sm"+(Math.abs((data.silenceThreshold!=null?data.silenceThreshold:0.7)-o[1])<0.001?" pri":"")} disabled={resilencing} onClick={()=>onResilence(o[1])}>{o[0]}</button>
+          ))}
+        </span>
       </div>
       <div className="lbl">Script pulito</div>
       <div className="scriptbox">{data.cleanScript}</div>
@@ -185,7 +196,7 @@ function Analysis({data,onToggle,toggling,onApprove}){
   );
 }
 
-function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,live}){
+function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,live}){
   const status=live.status||raw.status||"queued";
   return (
     <div className="take">
@@ -207,7 +218,7 @@ function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,o
       {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
       {live.tx && (<div className="tx"><p>{live.tx.text}</p><div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div></div>)}
       {live.analyzing && !live.analysis && <div style={{marginTop:12,color:"var(--muted)",fontSize:13}}><span className="spin"></span> Il cervello sta leggendo la trascrizione…</div>}
-      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} />}
+      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} onResilence={(th)=>onResilence(raw,th)} resilencing={!!live.resilencing} />}
       {status==="error" && live.error && <div className="banner" style={{marginTop:10,marginBottom:0}}>{live.error}</div>}
     </div>
   );
@@ -265,6 +276,11 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
     try{ const d=await analyzeApi({driveFileId:raw.driveFileId,toggle:i}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,toggling:false}})); }
     catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],toggling:false}})); }
   }
+  async function resilence(raw,threshold){
+    setLive(L=>({...L,[raw.id]:{...L[raw.id],resilencing:true}}));
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,silence:threshold}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,resilencing:false}})); }
+    catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],resilencing:false}})); }
+  }
   async function approveAndEdit(raw){
     try{ await api("approve",{driveFileId:raw.driveFileId}); }catch(_){}
     onOpenEditor(raw);
@@ -292,7 +308,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
       </div>
       {raws.length===0
         ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
-        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} live={liveFor(r)} />)}</div>}
+        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} live={liveFor(r)} />)}</div>}
     </div>
   );
 }
@@ -368,6 +384,12 @@ function Editor({driveFileId,name,onBack}){
     return ()=>{ if(hlsInst.current){ hlsInst.current.destroy(); hlsInst.current=null; } };
   },[phase,hlsUrl]);
 
+  async function retry(){
+    try{ await streamApi("reset",driveFileId); }catch(_){}
+    streamTriggered.delete(driveFileId);
+    setErr(""); setHlsUrl(null); setPhase("loading"); init();
+  }
+
   const keep=(analysis&&analysis.keep)||[];
   const totalDur=dur||(analysis&&analysis.duration)||0;
   const keptDur=keep.reduce((s,k)=>s+(k.end-k.start),0);
@@ -389,6 +411,7 @@ function Editor({driveFileId,name,onBack}){
       </div>
       <div style={{fontSize:14,color:"var(--muted)",marginBottom:14}}>{name||driveFileId}</div>
       {err && <div className="banner">{err}</div>}
+      {phase==="error" && <div style={{marginBottom:16}}><button className="btn pri" onClick={retry}>Riprova la preparazione</button></div>}
       {phase==="loading" && <div className="empty"><span className="spin"></span> Carico…</div>}
       {phase==="preparing" && <div className="empty"><span className="spin"></span> Preparo il video su Cloudflare Stream… la prima volta può richiedere qualche minuto.</div>}
       {phase==="ready" && (
