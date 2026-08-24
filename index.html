@@ -117,6 +117,7 @@ const API="/.netlify/functions/progetti";
 const TRANSCRIBE="/.netlify/functions/trascrivi-grezzo-background";
 const ANALYZE="/.netlify/functions/analizza";
 const STREAM_INGEST="/.netlify/functions/stream-ingest";
+const STREAM_BRIDGE="/.netlify/functions/stream-bridge-background";
 async function streamApi(action,driveFileId){
   const res=await fetch(STREAM_INGEST,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,driveFileId})});
   const d=await res.json().catch(()=>({})); if(!res.ok) throw new Error(d.error||("Errore "+res.status)); return d;
@@ -125,7 +126,7 @@ const streamTriggered=new Set();
 async function triggerStream(driveFileId){
   if(streamTriggered.has(driveFileId)) return;
   streamTriggered.add(driveFileId);
-  try{ const st=await streamApi("status",driveFileId); if(st.state!=="ready"){ streamApi("ingest",driveFileId); } }catch(_){}
+  try{ const st=await streamApi("status",driveFileId); if(st.state!=="ready"){ fetch(STREAM_BRIDGE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId})}); } }catch(_){}
 }
 const EST_MS=150000;
 
