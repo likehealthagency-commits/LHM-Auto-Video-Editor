@@ -90,6 +90,13 @@
   .cut .mk{font-family:"IBM Plex Mono";font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:5px;height:fit-content;margin-top:1px}
   .cut.keep .mk{background:#1f9d6614;color:var(--keep)} .cut.discard .mk{background:#e5484d14;color:var(--discard)}
   .cutctl{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0}
+  .splitrow{margin:6px 0 10px;padding:10px 12px;background:#F7F8FA;border:1px solid var(--line);border-radius:8px}
+  .splithint{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .chips{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+  .chip2{font-size:13px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:3px 7px;cursor:pointer;font-family:inherit}
+  .chip2:hover{border-color:var(--accent);color:var(--accent-ink)}
+  .chip2.last{cursor:default;opacity:.6}
+  .chip2 .sep{color:var(--accent);margin-left:5px;font-weight:700}
   .empty{text-align:center;padding:54px 20px;color:var(--muted)}
   .empty h3{color:var(--ink);font-weight:600;margin:0 0 6px;font-size:17px}
   .banner{background:#FDECEC;border:1px solid #F3C6C7;color:#A32B2E;padding:11px 14px;border-radius:9px;font-size:13.5px;margin-bottom:16px}
@@ -164,9 +171,10 @@ function Progress({startedAt}){
   return <div><div className="bar"><i style={{width:pct+"%"}}></i></div><div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div></div>;
 }
 
-function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing}){
+function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onStartSplit,onDoSplit,onCancelSplit,words,splitting}){
   const [copied,setCopied]=useState(false);
   function copy(){ try{ navigator.clipboard.writeText(data.cleanScript); setCopied(true); setTimeout(()=>setCopied(false),1500);}catch(_){}}
+  function segWords(d){ return (words||[]).filter(w=> w.start>=d.start-0.01 && w.start<d.end+0.01).sort((a,b)=>a.start-b.start); }
   return (
     <div className="analysis">
       <div className="asum">
@@ -188,16 +196,30 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing}){
       <div className="lbl">Lista tagli</div>
       <div>
         {data.decisions.map(d=>(
-          <div key={d.i} className={"cut "+d.action}>
-            <div className="tc">{fmtTC(d.start)} – {fmtTC(d.end)}</div>
-            <div className="bd">
-              <div className="txt">{d.text}</div>
-              {d.reason && <div className="rs">{d.reason}</div>}
+          <div key={d.i}>
+            <div className={"cut "+d.action}>
+              <div className="tc">{fmtTC(d.start)} – {fmtTC(d.end)}</div>
+              <div className="bd">
+                <div className="txt">{d.text}</div>
+                {d.reason && <div className="rs">{d.reason}</div>}
+              </div>
+              <div className="cutctl">
+                <div className="mk">{d.action==="keep"?"TIENI":"TAGLIA"}</div>
+                <button className="btn sm ghost" disabled={toggling} onClick={()=>onToggle(d.i)}>{d.action==="keep"?"→ Taglia":"→ Tieni"}</button>
+                <button className="btn sm ghost" onClick={()=>onStartSplit(d.i)}>Dividi</button>
+              </div>
             </div>
-            <div className="cutctl">
-              <div className="mk">{d.action==="keep"?"TIENI":"TAGLIA"}</div>
-              <button className="btn sm ghost" disabled={toggling} onClick={()=>onToggle(d.i)}>{d.action==="keep"?"→ Taglia":"→ Tieni"}</button>
-            </div>
+            {splitting===d.i && (
+              <div className="splitrow">
+                <div className="splithint">Clicca dopo la parola in cui vuoi dividere la frase in due:</div>
+                <div className="chips">
+                  {segWords(d).map((w,wi,arr)=> wi<arr.length-1
+                    ? <button key={wi} className="chip2" onClick={()=>onDoSplit(d.i,(w.end+arr[wi+1].start)/2)}>{w.word}<span className="sep">|</span></button>
+                    : <span key={wi} className="chip2 last">{w.word}</span>)}
+                </div>
+                <button className="btn sm ghost" onClick={onCancelSplit}>Annulla</button>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -205,7 +227,7 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing}){
   );
 }
 
-function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,live}){
+function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,onStartSplit,onDoSplit,onCancelSplit,live}){
   const status=live.status||raw.status||"queued";
   return (
     <div className="take">
@@ -227,7 +249,7 @@ function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,o
       {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
       {live.tx && (<div className="tx"><p>{live.tx.text}</p><div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div></div>)}
       {live.analyzing && !live.analysis && <div style={{marginTop:12,color:"var(--muted)",fontSize:13}}><span className="spin"></span> Il cervello sta leggendo la trascrizione…</div>}
-      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} onResilence={(th)=>onResilence(raw,th)} resilencing={!!live.resilencing} />}
+      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} onResilence={(th)=>onResilence(raw,th)} resilencing={!!live.resilencing} onStartSplit={(i)=>onStartSplit(raw,i)} onDoSplit={(i,at)=>onDoSplit(raw,i,at)} onCancelSplit={()=>onCancelSplit(raw)} words={live.words||[]} splitting={live.splitting} />}
       {status==="error" && live.error && <div className="banner" style={{marginTop:10,marginBottom:0}}>{live.error}</div>}
     </div>
   );
@@ -286,6 +308,16 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
     try{ const d=await analyzeApi({driveFileId:raw.driveFileId,toggle:i}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,toggling:false}})); }
     catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],toggling:false}})); }
   }
+  async function startSplit(raw,i){
+    let words = live[raw.id] && live[raw.id].words;
+    if(!words){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); words=(d.transcript&&d.transcript.words)||[]; setLive(L=>({...L,[raw.id]:{...L[raw.id],words}})); }catch(e){ setErr(e.message); return; } }
+    setLive(L=>({...L,[raw.id]:{...L[raw.id],splitting:i}}));
+  }
+  async function doSplit(raw,i,atTime){
+    try{ const d=await analyzeApi({driveFileId:raw.driveFileId,split:{i,atTime}}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,splitting:null}})); }
+    catch(e){ setErr(e.message); }
+  }
+  function cancelSplit(raw){ setLive(L=>({...L,[raw.id]:{...L[raw.id],splitting:null}})); }
   async function resilence(raw,threshold){
     setLive(L=>({...L,[raw.id]:{...L[raw.id],resilencing:true}}));
     try{ const d=await analyzeApi({driveFileId:raw.driveFileId,silence:threshold}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,resilencing:false}})); }
@@ -318,7 +350,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
       </div>
       {raws.length===0
         ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
-        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} live={liveFor(r)} />)}</div>}
+        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} live={liveFor(r)} />)}</div>}
     </div>
   );
 }
