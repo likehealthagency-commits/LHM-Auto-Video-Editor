@@ -116,17 +116,18 @@ function subtractCovered(iv, covered){
   }
   return segs;
 }
-function findGaps(words, silences, duration, minGap){
+// buchi di copertura: pezzi di [0..durata] NON coperti da nessuna parola
+function coverageHoles(words, duration, tol){
   if(!duration || duration<=0) return [];
-  const speech = complement(silences, duration);
-  const covered = mergeCovered(words, 0.35);
-  const gaps=[];
-  for(const sp of speech){
-    for(const g of subtractCovered(sp, covered)){
-      if(g.end - g.start >= minGap) gaps.push(g);
-    }
-  }
-  return gaps;
+  const covered = mergeCovered(words, tol);
+  return subtractCovered({ start:0, end:duration }, covered);
+}
+// quanta parte di un buco e' silenzio (0..1)
+function silenceFraction(hole, silences){
+  let sil=0;
+  for(const s of (silences||[])){ const ov=Math.min(hole.end,s.end)-Math.max(hole.start,s.start); if(ov>0) sil+=ov; }
+  const len=hole.end-hole.start;
+  return len>0 ? sil/len : 1;
 }
 function extractSlice(audioPath, start, dur, outPath){
   return new Promise((resolve, reject)=>{
@@ -136,43 +137,63 @@ function extractSlice(audioPath, start, dur, outPath){
     ff.on("close", c=> c===0 ? resolve() : reject(new Error("ffmpeg slice " + c)));
   });
 }
-async function recoverGaps(audioPath, duration, silences, words, segments){
-  const gaps = findGaps(words, silences, duration||0, 1.0).slice(0, 25);
-  if(gaps.length===0) return { words, segments, recovered:0 };
-  let addedWords=[], addedSegs=[], recovered=0;
-  for(const g of gaps){
-    const pad=0.3;
-    const start=Math.max(0, g.start-pad);
-    const dur=Math.min((duration||g.end)-start, (g.end+pad)-start);
-    if(dur<0.4) continue;
-    const slice="/tmp/gap_"+Date.now()+"_"+Math.round(start*1000)+".mp3";
-    try{
-      await extractSlice(audioPath, start, dur, slice);
-      const v = await whisperVerbose(slice);
-      try { fs.unlinkSync(slice); } catch(_){}
-      if(!(v.text||"").trim()) continue;
-      // tieni SOLO le parole che cadono dentro il buco (niente sconfinamenti = niente sovrapposizioni)
-      const kw=(Array.isArray(v.words)?v.words:[])
-        .map(w=>({ word:w.word, start:(w.start||0)+start, end:(w.end||0)+start }))
-        .filter(w=> w.start>=g.start-0.05 && w.end<=g.end+0.15);
-      if(kw.length===0) continue;
-      addedWords=addedWords.concat(kw);
-      addedSegs.push({ start:kw[0].start, end:kw[kw.length-1].end, text:kw.map(w=>w.word).join(" ") });
-      recovered++;
-    }catch(_){ try{ fs.unlinkSync(slice); }catch(__){} }
-  }
-  if(recovered===0) return { words, segments, recovered:0 };
-  return { words: words.concat(addedWords), segments: segments.concat(addedSegs), recovered };
+async function transcribeHole(audioPath, g, duration){
+  const pad=0.3, start=Math.max(0,g.start-pad), dur=Math.min(duration-start,(g.end+pad)-start);
+  if(dur<0.4) return null;
+  const slice="/tmp/gap_"+Date.now()+"_"+Math.round(start*1000)+".mp3";
+  try{
+    await extractSlice(audioPath,start,dur,slice);
+    const v=await whisperVerbose(slice);
+    try{ fs.unlinkSync(slice); }catch(_){}
+    if(!(v.text||"").trim()) return null;
+    const kw=(Array.isArray(v.words)?v.words:[])
+      .map(w=>({ word:w.word, start:(w.start||0)+start, end:(w.end||0)+start }))
+      .filter(w=> w.start>=g.start-0.05 && w.end<=g.end+0.2);
+    if(kw.length===0) return null;
+    return { words:kw, seg:{ start:kw[0].start, end:kw[kw.length-1].end, text:kw.map(w=>w.word).join(" ") } };
+  }catch(_){ try{ fs.unlinkSync(slice); }catch(__){} return null; }
 }
 
-// garantisce: parole senza duplicati/sovrapposizioni, segmenti senza sovrapposizioni, tempi entro la durata
+// riempie TUTTI i buchi di copertura (parlato senza testo), per avere la mappa COMPLETA
+async function fillTranscript(audioPath, duration, silences, words, segments){
+  if(!duration || duration<=0) return { words, segments, recovered:0, holesBefore:0, holesAfter:0 };
+  const holes0 = coverageHoles(words, duration, 0.35).filter(h=> h.end-h.start >= 0.5);
+  const holesBefore = holes0.filter(h=> silenceFraction(h,silences) < 0.9).reduce((a,h)=>a+(h.end-h.start),0);
+  // riempi ogni buco NON prevalentemente silenzioso (fino a 40), in due passate se serve
+  let allWords=words.slice(), allSegs=segments.slice(), recovered=0;
+  for(let pass=0; pass<2; pass++){
+    const holes = coverageHoles(allWords, duration, 0.35)
+      .filter(h=> h.end-h.start >= 0.5 && silenceFraction(h,silences) < 0.9)
+      .slice(0, 40);
+    if(holes.length===0) break;
+    let any=false;
+    for(const g of holes){
+      const r = await transcribeHole(audioPath, g, duration);
+      if(r){ allWords=allWords.concat(r.words); allSegs.push(r.seg); recovered++; any=true; }
+    }
+    if(!any) break;
+  }
+  const holesAfter = coverageHoles(allWords, duration, 0.35)
+    .filter(h=> h.end-h.start >= 0.5 && silenceFraction(h,silences) < 0.9)
+    .reduce((a,h)=>a+(h.end-h.start),0);
+  return { words: allWords, segments: allSegs, recovered, holesBefore, holesAfter };
+}
+
+function normW(x){ return String(x||"").toLowerCase().replace(/[\s.,!?;:"'’“”()\-]/g,""); }
+// garantisce: nessun DOPPIONE vero, nessuna frase sovrapposta, tempi entro la durata
+// (conservativo: NON scarta parole legittime, solo i duplicati evidenti)
 function cleanTranscript(words, segments, duration){
   const D = duration || null;
   const ws=(words||[]).filter(w=> typeof w.start==="number" && typeof w.end==="number" && w.end>w.start).sort((a,b)=>a.start-b.start);
   const cw=[];
   for(const w of ws){
     const last=cw[cw.length-1];
-    if(last && w.start < last.end - 0.06) continue; // sovrapposizione = parola duplicata: la scarto
+    if(last){
+      const ov=Math.min(w.end,last.end)-Math.max(w.start,last.start);
+      const shorter=Math.min(w.end-w.start, last.end-last.start);
+      // scarto SOLO se e' la STESSA parola con forte sovrapposizione temporale (doppione reale)
+      if(ov>0 && shorter>0 && ov>=0.5*shorter && normW(w.word)===normW(last.word)) continue;
+    }
     cw.push({ word:w.word, start:w.start, end:(D? Math.min(w.end,D) : w.end) });
   }
   const ss=(segments||[]).filter(s=> typeof s.start==="number" && typeof s.end==="number" && s.end>s.start).sort((a,b)=>a.start-b.start);
@@ -180,13 +201,51 @@ function cleanTranscript(words, segments, duration){
   for(const s of ss){
     let start=s.start, end=(D? Math.min(s.end,D) : s.end);
     const last=cs[cs.length-1];
-    if(last && start < last.end) start=last.end;   // niente sovrapposizioni tra frasi
-    if(end - start < 0.05) continue;
+    if(last && start < last.end - 0.02) start=last.end; // evita sovrapposizioni evidenti tra frasi
+    if(end - start < 0.05) continue; // frase interamente contenuta in un'altra (stesso tempo = doppione) -> scarto
     cs.push({ start, end, text:(s.text||"").trim() });
   }
   cs.forEach((s,i)=>{ s.id=i; });
   const text=cs.map(s=>s.text).join(" ").replace(/\s+/g," ").trim();
   return { words:cw, segments:cs, text };
+}
+
+// IDEA 2: segmenti con POCO testo per TROPPO tempo (Whisper ha compresso/saltato).
+// Ri-trascriviamo isolato quel pezzo: da solo Whisper non comprime e tira fuori tutto.
+async function densifyTranscript(audioPath, duration, words, segments){
+  if(!duration || duration<=0) return { words, segments, densified:0 };
+  let allWords = words.slice();
+  let newSegments = segments.slice();
+  let densified = 0;
+  const candidates = segments.filter(function(s){
+    const dur = s.end - s.start; if(dur < 3) return false;
+    const wc = words.filter(function(w){ return w.start>=s.start-0.05 && w.start<s.end+0.05; }).length;
+    return (wc/dur) < 1.4; // meno di ~1,4 parole al secondo = sospetto
+  }).slice(0, 20);
+  for(const seg of candidates){
+    const pad=0.2, start=Math.max(0, seg.start-pad), dur=Math.min(duration-start, (seg.end+pad)-start);
+    if(dur<0.5) continue;
+    const slice="/tmp/dens_"+Date.now()+"_"+Math.round(start*1000)+".mp3";
+    try{
+      await extractSlice(audioPath, start, dur, slice);
+      const v = await whisperVerbose(slice);
+      try{ fs.unlinkSync(slice); }catch(_){}
+      const nw=(Array.isArray(v.words)?v.words:[])
+        .map(function(w){ return { word:w.word, start:(w.start||0)+start, end:(w.end||0)+start }; })
+        .filter(function(w){ return w.start>=seg.start-0.1 && w.end<=seg.end+0.25; });
+      const oldCount = allWords.filter(function(w){ return w.start>=seg.start-0.05 && w.start<seg.end+0.05; }).length;
+      // sostituisco SOLO se la versione isolata e' davvero piu' ricca (ha trovato roba nascosta)
+      if(nw.length >= oldCount+2 && nw.length > oldCount*1.3){
+        const ns=(Array.isArray(v.segments)?v.segments:[])
+          .map(function(x){ return { start:(x.start||0)+start, end:(x.end||0)+start, text:(x.text||"").trim() }; })
+          .filter(function(x){ return x.start>=seg.start-0.2 && x.end<=seg.end+0.35 && x.text; });
+        allWords = allWords.filter(function(w){ return !(w.start>=seg.start-0.05 && w.start<seg.end+0.05); }).concat(nw);
+        newSegments = newSegments.filter(function(x){ return x!==seg; }).concat(ns.length ? ns : [{ start:nw[0].start, end:nw[nw.length-1].end, text:nw.map(function(w){return w.word;}).join(" ") }]);
+        densified++;
+      }
+    }catch(_){ try{ fs.unlinkSync(slice); }catch(__){} }
+  }
+  return { words: allWords, segments: newSegments, densified };
 }
 
 // ---------- R2 ----------
@@ -249,13 +308,23 @@ exports.handler = async (event) => {
     console.log("Durata audio: " + (duration? duration.toFixed(1)+"s" : "?") + " · silenzi rilevati: " + audioMap.silences.length);
 
     // recupero del parlato eventualmente saltato da Whisper (buchi con voce ma senza testo)
-    let recovered = 0;
+    // ridensifica i segmenti sospetti (poco testo per troppo tempo)
+    let densified = 0;
     try {
-      console.log("Cerco parlato eventualmente saltato...");
-      const r = await recoverGaps(aud, duration, audioMap.silences, words, segments);
+      console.log("Controllo segmenti troppo sparsi (frase breve per tempo lungo)...");
+      const dz = await densifyTranscript(aud, duration, words, segments);
+      words = dz.words; segments = dz.segments; densified = dz.densified;
+      console.log("Ridensificati " + densified + " segmenti sospetti.");
+    } catch(e){ console.log("Ridensificazione saltata:", String((e&&e.message)||e).slice(0,120)); }
+
+    let recovered = 0, coverage = null;
+    try {
+      console.log("Completo la mappa del trascritto (riempio i buchi con voce)...");
+      const r = await fillTranscript(aud, duration, audioMap.silences, words, segments);
       words = r.words; segments = r.segments; recovered = r.recovered;
-      console.log(recovered>0 ? ("Recuperati " + recovered + " pezzi di parlato mancante.") : "Nessun pezzo mancante rilevato.");
-    } catch(e){ console.log("Recupero saltato:", String((e&&e.message)||e).slice(0,120)); }
+      coverage = { duration: duration? +duration.toFixed(1) : null, holesBefore: +r.holesBefore.toFixed(1), holesAfter: +r.holesAfter.toFixed(1) };
+      console.log("Copertura: parlato senza testo " + r.holesBefore.toFixed(1) + "s -> residuo " + r.holesAfter.toFixed(1) + "s (recuperati " + recovered + " pezzi)");
+    } catch(e){ console.log("Completamento saltato:", String((e&&e.message)||e).slice(0,120)); }
 
     try { fs.unlinkSync(aud); } catch(_){}
 
@@ -273,7 +342,8 @@ exports.handler = async (event) => {
       text,
       segments,
       words,
-      recovered
+      recovered,
+      coverage
     };
     const objectKey = "transcripts/" + driveFileId + ".json";
     await putToR2(objectKey, JSON.stringify(transcriptObj, null, 2));
