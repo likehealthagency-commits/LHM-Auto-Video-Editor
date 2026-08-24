@@ -47,6 +47,7 @@ const SYSTEM = [
 "Il tuo compito: per OGNI segmento decidere se TENERLO (keep) o SCARTARLO (discard), per ottenere un montato lineare e pulito che mantenga il senso del discorso.",
 "Regole:",
 "- RI-REGISTRAZIONI (regola importante): quando due o piu' segmenti dicono la STESSA cosa o quasi (la persona ha ripetuto la frase per dirla meglio), TIENI SEMPRE l'ULTIMA versione, cioe' quella piu' avanti nel tempo (id piu' alto), e SCARTA quelle precedenti. Chi ri-registra lo fa per correggersi: l'ultima ripetizione e' quasi sempre quella buona. NON tenere mai la prima di una serie di ripetizioni simili.",
+"- NON scartare un segmento che contiene anche informazioni NUOVE, UTILI o UNICHE solo perche' una parte ripete qualcosa gia' detto: nel dubbio TIENILO (l'utente potra' dividerlo e rifinirlo a mano).",
 "- SCARTA false partenze, frasi troncate e riprese, ripetizioni evidenti, sbavature.",
 "- TIENI i segmenti che compongono il discorso finale coerente.",
 "- Nel DUBBIO, TIENI e spiega il dubbio nel motivo (meglio lasciare da rifinire a mano che perdere contenuto buono).",
@@ -72,6 +73,27 @@ async function callLLM(segments){
 }
 
 // ---------- calcoli ----------
+// spezza i segmenti di Whisper in unita' piu' fini dove c'e' una pausa netta tra le parole,
+// cosi' ripetizioni e ri-registrazioni nascoste dentro un segmento emergono come righe separate
+function refineSegments(segments, words, gap){
+  const out=[];
+  for(const seg of (segments||[])){
+    const ws=(words||[]).filter(w=> w.start>=seg.start-0.01 && w.start<seg.end+0.01).sort((a,b)=>(a.start||0)-(b.start||0));
+    if(ws.length<4){ out.push({ start:seg.start, end:seg.end, text:seg.text }); continue; }
+    const cuts=[];
+    for(let k=1;k<ws.length;k++){ if((ws[k].start - ws[k-1].end) > gap) cuts.push(k); }
+    if(cuts.length===0){ out.push({ start:seg.start, end:seg.end, text:seg.text }); continue; }
+    let startIdx=0; const bounds=cuts.concat([ws.length]);
+    for(const b of bounds){
+      const pc=ws.slice(startIdx,b); startIdx=b;
+      if(pc.length>0) out.push({ start:pc[0].start, end:pc[pc.length-1].end, text:pc.map(w=>w.word).join(" ") });
+    }
+  }
+  out.sort((a,b)=>(a.start||0)-(b.start||0));
+  out.forEach((seg,i)=>{ seg.id=i; });
+  return out;
+}
+
 function mergeKeepRaw(decisions){
   const intervals=[]; let cur=null;
   for(const d of decisions){
@@ -120,8 +142,9 @@ function applySilence(a, words){
 async function analyze(driveFileId){
   const tr=await r2GetJson("transcripts/"+driveFileId+".json");
   if(!tr) throw new Error("Trascrizione non trovata: trascrivi prima il video.");
-  const segs=(tr.segments||[]).slice().sort((a,b)=>(a.start||0)-(b.start||0));
-  if(segs.length===0) throw new Error("Nessun segmento nella trascrizione.");
+  const segs0=(tr.segments||[]).slice().sort((a,b)=>(a.start||0)-(b.start||0));
+  if(segs0.length===0) throw new Error("Nessun segmento nella trascrizione.");
+  const segs=refineSegments(segs0, tr.words||[], 0.55);
   const decisions=await callLLM(segs);
   const byId={}; decisions.forEach(d=>{ byId[d.i]=d; });
   const enriched=segs.map(s=>{
@@ -152,6 +175,25 @@ exports.handler = async (event) => {
       const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[]);
       delete a.keepManual; a.manualKeep=false;
       a.edited=true; a.editedAt=new Date().toISOString();
+      await r2PutJson("analyses/"+id+".json", a);
+      return ok({analysis:a});
+    }
+    // divide un segmento in due parti al tempo indicato (per separare parte buona e ripetizione)
+    if(p.split && p.split.i!==undefined && p.split.atTime!==undefined){
+      const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
+      const tr=await r2GetJson("transcripts/"+id+".json"); const words=(tr&&tr.words)||[];
+      const idx=(a.decisions||[]).findIndex(x=>x.i===p.split.i); if(idx<0) throw new Error("Segmento non trovato.");
+      const seg=a.decisions[idx]; const atTime=+p.split.atTime;
+      const ws=words.filter(w=> w.start>=seg.start-0.01 && w.start<seg.end+0.01).sort((x,y)=>x.start-y.start);
+      const before=ws.filter(w=> w.start < atTime), after=ws.filter(w=> w.start >= atTime);
+      if(before.length===0 || after.length===0) throw new Error("Punto di divisione non valido.");
+      const partA={ i:seg.i, start:seg.start, end:before[before.length-1].end, text:before.map(w=>w.word).join(" "), action:seg.action, reason:"diviso a mano" };
+      const partB={ i:seg.i, start:after[0].start, end:seg.end, text:after.map(w=>w.word).join(" "), action:seg.action, reason:"diviso a mano" };
+      a.decisions.splice(idx,1,partA,partB);
+      a.decisions.sort((x,y)=>(x.start||0)-(y.start||0));
+      a.decisions.forEach((d,k)=>{ d.i=k; });
+      recompute(a); applySilence(a, words);
+      delete a.keepManual; a.manualKeep=false; a.edited=true;
       await r2PutJson("analyses/"+id+".json", a);
       return ok({analysis:a});
     }
