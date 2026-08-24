@@ -1,4 +1,4 @@
-// APP DI MONTAGGIO — PEZZO 1 (versione definitiva funzionante)
+// APP DI MONTAGGIO — PEZZO 1 (salvataggio su Cloudflare R2)
 // Netlify BACKGROUND function.
 //
 // Riceve { driveFileId } = l'ID su Google Drive del VIDEO GREZZO.
@@ -6,13 +6,12 @@
 //   gestisce qualunque formato e NON scarica il video intero (regge i file grossi).
 //   A terra finisce solo l'audio .mp3 mono 16kHz.
 // - Trascrive con Whisper (timestamp per parola e per segmento).
-// - Salva il JSON nel DRIVE CONDIVISO (Shared Drive), dove il Service Account
-//   ha quota e puo' creare file nuovi. Sottocartella dedicata "Montaggio - Trascrizioni".
-//   (Su "Il mio Drive" di un Gmail il SA non puo' creare: no storage quota.)
-// - Salvataggio "a due passi" (crea metadati -> PATCH contenuto), come fa Palinsesto.
-// In caso di errore scrive un file "... - ERRORE.json" nella stessa sottocartella.
+// - Salva il JSON su CLOUDFLARE R2 (nessun problema di quota/permessi come su Drive).
+//   Nome file: transcripts/<driveFileId>.json  -> etichettato per progetto video,
+//   cosi' in futuro un pulsante "cancella progetto" potra' eliminarlo in modo mirato.
 //
-// Variabili: GOOGLE_SA_JSON, OPENAI_API_KEY.
+// Variabili: GOOGLE_SA_JSON, OPENAI_API_KEY, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+//            R2_ENDPOINT, R2_BUCKET.
 // NOME FILE: deve finire con "-background".
 
 const crypto = require("crypto");
@@ -21,16 +20,6 @@ const { spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static");
 
 const SCOPE = "https://www.googleapis.com/auth/drive";
-
-// IMPORTANTE: NON si usa la radice del Drive Condiviso (0A...) come parent: il Service
-// Account non e' membro dell'intero drive, quindi la radice per lui "non esiste" (404).
-// Si usa invece una CARTELLA condivisa col Service Account. Qui: la "cartella madre" dei
-// clienti di Palinsesto, che e' sul Drive Condiviso ed e' scrivibile dal SA.
-// (In futuro, per tenere gli output separati, sostituire con l'ID di una cartella dedicata
-//  creata nel Drive Condiviso e condivisa col Service Account.)
-const OUTPUT_PARENT = "1e81onqkdfnzuCUi8eYmmgoYhKfTaqsHe";
-// Sottocartella dedicata agli output del tool (creata al primo avvio dentro OUTPUT_PARENT).
-const OUTPUT_SUBFOLDER = "Montaggio - Trascrizioni";
 
 function b64url(buf){ return Buffer.from(buf).toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
 
@@ -47,40 +36,13 @@ async function getSaToken(sa, scope){
   return data.access_token;
 }
 
-async function gDrive(token, path){
-  const res = await fetch("https://www.googleapis.com/drive/v3" + path, { headers:{ "Authorization":"Bearer "+token } });
-  if(!res.ok) throw new Error("Drive " + res.status + " " + (await res.text()).slice(0,140));
+async function getFileMeta(token, fileId){
+  const p = new URLSearchParams({ fields:"id,name,size,parents,mimeType", supportsAllDrives:"true" });
+  const res = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(fileId) + "?" + p.toString(), { headers:{ "Authorization":"Bearer "+token } });
+  if(!res.ok) throw new Error("Drive meta " + res.status + " " + (await res.text()).slice(0,140));
   return res.json();
 }
 
-async function getFileMeta(token, fileId){
-  const p = new URLSearchParams({ fields:"id,name,size,parents,mimeType", supportsAllDrives:"true" });
-  return gDrive(token, "/files/" + encodeURIComponent(fileId) + "?" + p.toString());
-}
-
-// Cerca una sottocartella per nome dentro un parent, sui Drive condivisi.
-async function findFolder(token, name, parentId){
-  const safe = String(name).replace(/'/g, "\\'");
-  const q = `name = '${safe}' and mimeType = 'application/vnd.google-apps.folder' and '${parentId}' in parents and trashed = false`;
-  const p = new URLSearchParams({ q, fields:"files(id)", includeItemsFromAllDrives:"true", supportsAllDrives:"true", corpora:"allDrives", pageSize:"1" });
-  const d = await gDrive(token, "/files?" + p.toString());
-  return (d.files && d.files[0]) ? d.files[0].id : null;
-}
-
-async function findOrCreateFolder(token, name, parentId){
-  const existing = await findFolder(token, name, parentId);
-  if(existing) return existing;
-  const res = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id", {
-    method:"POST",
-    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
-    body: JSON.stringify({ name, mimeType:"application/vnd.google-apps.folder", parents:[parentId] })
-  });
-  if(!res.ok) throw new Error("Drive mkdir " + res.status + " " + (await res.text()).slice(0,140));
-  const d = await res.json();
-  return d.id;
-}
-
-// FFmpeg legge il video direttamente dall'URL di Drive ed estrae solo l'audio.
 function extractAudioFromDriveUrl(token, driveFileId, outAudioPath){
   return new Promise((resolve, reject) => {
     const url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(driveFileId) + "?alt=media&supportsAllDrives=true";
@@ -114,24 +76,59 @@ async function whisperVerbose(audioPath){
   return d;
 }
 
-// Salvataggio "a due passi" (come Palinsesto): 1) crea metadati -> fileId  2) PATCH media contenuto.
-async function createJsonOnDrive(token, parentId, name, obj){
-  // Passo 1: crea il file (solo metadati) sul Drive Condiviso.
-  const meta = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id", {
-    method:"POST",
-    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
-    body: JSON.stringify({ name, mimeType:"application/json", parents:[parentId] })
+// --- Firma AWS SigV4 per Cloudflare R2 (compatibile S3), senza librerie esterne ---
+function hmac(key, str){ return crypto.createHmac("sha256", key).update(str, "utf8").digest(); }
+function sha256hex(str){ return crypto.createHash("sha256").update(str, "utf8").digest("hex"); }
+
+async function putToR2(objectKey, bodyString){
+  const accessKey = process.env.R2_ACCESS_KEY_ID;
+  const secretKey = process.env.R2_SECRET_ACCESS_KEY;
+  const endpoint  = process.env.R2_ENDPOINT;   // https://<account>.r2.cloudflarestorage.com
+  const bucket    = process.env.R2_BUCKET;
+
+  const host = endpoint.replace(/^https?:\/\//, "");
+  const region = "auto";
+  const service = "s3";
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");       // YYYYMMDDTHHMMSSZ
+  const dateStamp = amzDate.slice(0, 8);                                 // YYYYMMDD
+
+  const canonicalUri = "/" + bucket + "/" + objectKey.split("/").map(encodeURIComponent).join("/");
+  const payloadHash = sha256hex(bodyString);
+  const canonicalHeaders =
+    "host:" + host + "\n" +
+    "x-amz-content-sha256:" + payloadHash + "\n" +
+    "x-amz-date:" + amzDate + "\n";
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = [
+    "PUT", canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash
+  ].join("\n");
+
+  const algorithm = "AWS4-HMAC-SHA256";
+  const credentialScope = dateStamp + "/" + region + "/" + service + "/aws4_request";
+  const stringToSign = [ algorithm, amzDate, credentialScope, sha256hex(canonicalRequest) ].join("\n");
+
+  const kDate = hmac("AWS4" + secretKey, dateStamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, service);
+  const kSigning = hmac(kService, "aws4_request");
+  const signature = crypto.createHmac("sha256", kSigning).update(stringToSign, "utf8").digest("hex");
+
+  const authorization = algorithm + " Credential=" + accessKey + "/" + credentialScope +
+    ", SignedHeaders=" + signedHeaders + ", Signature=" + signature;
+
+  const res = await fetch(endpoint + canonicalUri, {
+    method: "PUT",
+    headers: {
+      "Authorization": authorization,
+      "x-amz-date": amzDate,
+      "x-amz-content-sha256": payloadHash,
+      "Content-Type": "application/json"
+    },
+    body: bodyString
   });
-  if(!meta.ok) throw new Error("Drive create " + meta.status + " " + (await meta.text()).slice(0,140));
-  const fileId = (await meta.json()).id;
-  // Passo 2: scrivi il contenuto.
-  const put = await fetch("https://www.googleapis.com/upload/drive/v3/files/" + fileId + "?uploadType=media&supportsAllDrives=true", {
-    method:"PATCH",
-    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
-    body: JSON.stringify(obj, null, 2)
-  });
-  if(!put.ok) throw new Error("Drive write " + put.status + " " + (await put.text()).slice(0,140));
-  return fileId;
+  if(!res.ok) throw new Error("R2 put " + res.status + " " + (await res.text()).slice(0,160));
+  return objectKey;
 }
 
 exports.handler = async (event) => {
@@ -140,32 +137,27 @@ exports.handler = async (event) => {
   if(!driveFileId) return { statusCode:400 };
 
   const aud = "/tmp/grezzo_" + Date.now() + ".mp3";
-  let token, outFolderId, baseName = "video";
+  let token;
   try {
     const sa = JSON.parse(process.env.GOOGLE_SA_JSON);
     token = await getSaToken(sa, SCOPE);
 
-    // 1) Metadati del video (per nome + verifica sia un video).
+    // 1) Metadati video.
     const meta = await getFileMeta(token, driveFileId);
     if(!meta || !meta.id) throw new Error("File Drive non trovato: " + driveFileId);
     if(!String(meta.mimeType||"").startsWith("video/")) throw new Error("Il file non e' un video (" + meta.mimeType + ").");
-    baseName = String(meta.name || "video").replace(/\.[^.]+$/, "");
 
-    // 2) Cartella di output dentro una cartella condivisa col SA (sul Drive Condiviso).
-    outFolderId = await findOrCreateFolder(token, OUTPUT_SUBFOLDER, OUTPUT_PARENT);
-
-    // 3) FFmpeg legge Drive direttamente ed estrae solo l'audio.
+    // 2) FFmpeg legge Drive ed estrae solo l'audio.
     console.log("Estraggo l'audio da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
     await extractAudioFromDriveUrl(token, driveFileId, aud);
 
-    // 4) Controllo audio.
-    let sizeMB = 0;
-    try { sizeMB = fs.statSync(aud).size / 1048576; } catch(_){ sizeMB = 0; }
+    // 3) Controllo audio.
+    let sizeMB = 0; try { sizeMB = fs.statSync(aud).size / 1048576; } catch(_){ sizeMB = 0; }
     console.log("Audio " + sizeMB.toFixed(2) + " MB -> Whisper...");
     if(sizeMB < 0.005) throw new Error("Audio vuoto: FFmpeg non ha estratto suono dal video.");
     if(sizeMB > 24.5) throw new Error("Audio troppo lungo per la trascrizione (oltre ~24 MB, ~50 min).");
 
-    // 5) Trascrizione con timestamp.
+    // 4) Trascrizione.
     const v = await whisperVerbose(aud);
     try { fs.unlinkSync(aud); } catch(_){}
     const text = (v.text || "").trim();
@@ -173,7 +165,7 @@ exports.handler = async (event) => {
     const words = Array.isArray(v.words) ? v.words : [];
     const segments = Array.isArray(v.segments) ? v.segments : [];
 
-    // 6) JSON completo salvato sul Drive Condiviso.
+    // 5) JSON + salvataggio su R2 (chiave etichettata per progetto video).
     const transcriptObj = {
       version: 1,
       createdAt: new Date().toISOString(),
@@ -184,15 +176,16 @@ exports.handler = async (event) => {
       segments: segments.map(function(s){ return { id: s.id, start: s.start, end: s.end, text: (s.text||"").trim() }; }),
       words: words.map(function(w){ return { word: w.word, start: w.start, end: w.end }; }),
     };
-    const jsonName = baseName + " - trascrizione.json";
-    const fileId = await createJsonOnDrive(token, outFolderId, jsonName, transcriptObj);
-    console.log("OK: " + words.length + " parole, " + segments.length + " segmenti -> " + jsonName + " (" + fileId + ")");
+    const objectKey = "transcripts/" + driveFileId + ".json";
+    await putToR2(objectKey, JSON.stringify(transcriptObj, null, 2));
+    console.log("OK: " + words.length + " parole, " + segments.length + " segmenti -> R2 " + objectKey);
     return { statusCode:200 };
   } catch(e){
     try { fs.unlinkSync(aud); } catch(_){}
     const msg = String((e && e.message) || e).slice(0, 300);
     console.log("ERRORE:", msg);
-    try { if(token && outFolderId){ await createJsonOnDrive(token, outFolderId, baseName + " - ERRORE.json", { error: msg, at: new Date().toISOString(), driveFileId }); } } catch(_){}
+    // Marcatore d'errore su R2 (best-effort).
+    try { await putToR2("errors/" + driveFileId + ".json", JSON.stringify({ error: msg, at: new Date().toISOString(), driveFileId }, null, 2)); } catch(_){}
     return { statusCode:500 };
   }
 };
