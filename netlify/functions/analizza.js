@@ -86,6 +86,22 @@ function buildKeepIntervals(orderedSegs, keepSet){
   return intervals;
 }
 
+// ricalcola script pulito, intervalli keep e conteggi dalle decisioni (dopo una modifica manuale)
+function recompute(a){
+  const decs=a.decisions||[];
+  const kept=decs.filter(d=>d.action==="keep");
+  a.cleanScript=kept.map(d=>d.text).join(" ").replace(/\s+/g," ").trim();
+  const intervals=[]; let cur=null;
+  for(const d of decs){
+    if(d.action==="keep"){ if(cur) cur.end=d.end; else cur={start:d.start,end:d.end}; }
+    else if(cur){ intervals.push(cur); cur=null; }
+  }
+  if(cur) intervals.push(cur);
+  a.keep=intervals;
+  a.stats={ total:decs.length, kept:kept.length, discarded:decs.length-kept.length };
+  return a;
+}
+
 async function analyze(driveFileId){
   const tr = await r2GetJson("transcripts/"+driveFileId+".json");
   if(!tr) throw new Error("Trascrizione non trovata: analizza prima il video.");
@@ -125,6 +141,16 @@ exports.handler = async (event) => {
   const id=p.driveFileId;
   if(!id) return { statusCode:400, body:JSON.stringify({error:"driveFileId mancante"}) };
   try{
+    if(p.toggle!==undefined && p.toggle!==null){
+      const a=await r2GetJson("analyses/"+id+".json");
+      if(!a) throw new Error("Analisi non trovata: esegui prima 'Trova i tagli'.");
+      const dec=(a.decisions||[]).find(x=>x.i===p.toggle);
+      if(!dec) throw new Error("Segmento non trovato.");
+      dec.action = dec.action==="keep" ? "discard" : "keep";
+      recompute(a); a.edited=true; a.editedAt=new Date().toISOString();
+      await r2PutJson("analyses/"+id+".json", a);
+      return { statusCode:200, headers:{"Content-Type":"application/json"}, body:JSON.stringify({ analysis:a }) };
+    }
     const existing = await r2GetJson("analyses/"+id+".json");
     if(p.peek) return { statusCode:200, headers:{"Content-Type":"application/json"}, body:JSON.stringify({ analysis: existing }) };
     if(existing && !p.force) return { statusCode:200, headers:{"Content-Type":"application/json"}, body:JSON.stringify({ analysis: existing }) };
