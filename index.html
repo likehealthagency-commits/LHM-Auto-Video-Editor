@@ -194,9 +194,14 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   const [audioUrl,setAudioUrl]=useState(null); const [aPlaying,setAPlaying]=useState(false); const [aT,setAT]=useState(0);
   const [aMsg,setAMsg]=useState("");
   const [aDur,setADur]=useState(0); const [barOpen,setBarOpen]=useState(false);
+  const [montageMode,setMontageMode]=useState(false);
   const [fStart,setFStart]=useState(""); const [fEnd,setFEnd]=useState(""); const [fMsg,setFMsg]=useState(""); const [fBusy,setFBusy]=useState(false);
   async function loadAudio(){ if(audioUrl) return audioUrl; setAMsg("Carico l'audio…"); try{ const d=await api("audioUrl",{driveFileId:data.driveFileId}); if(!d.url){ setAMsg("Audio non ancora salvato: ri-trascrivi questo video (la nuova trascrizione salva l'audio)."); return null; } setAudioUrl(d.url); setAMsg(""); return d.url; }catch(e){ setAMsg("Errore nel recupero audio: "+((e&&e.message)||e)); return null; } }
-  async function startAudio(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setBarOpen(true); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Il browser non riesce a riprodurre l'audio: "+(err&&err.message||err)); }); }
+  const keepIvs=()=> (data.keep&&data.keep.length? data.keep : (data.keepRaw||[]));
+  function onAudioTime(){ const a=audioRef.current; if(!a) return; const t=a.currentTime; setAT(t);
+    if(montageMode){ const ivs=keepIvs(); if(ivs.length && !ivs.some(k=> t>=k.start-0.03 && t<k.end)){ const nx=ivs.find(k=> k.start>t-0.02); if(nx){ a.currentTime=nx.start; } else { a.pause(); setAPlaying(false); } } } }
+  async function startAudio(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setMontageMode(false); setBarOpen(true); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Il browser non riesce a riprodurre l'audio: "+(err&&err.message||err)); }); }
+  async function startMontage(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } const ivs=keepIvs(); setMontageMode(true); setBarOpen(true); if(ivs.length){ try{ a.currentTime=ivs[0].start; }catch(_){} } a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Riproduzione non riuscita: "+(err&&err.message||err)); }); }
   function playPause(){ const a=audioRef.current; if(!a) return; if(a.paused){ a.play().catch(()=>{}); setAPlaying(true); } else { a.pause(); setAPlaying(false); } }
   function seekBar(e){ const a=audioRef.current; if(!a||!aDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; const t=Math.max(0,Math.min(aDur,p*aDur)); a.currentTime=t; setAT(t); }
   function closeBar(){ const a=audioRef.current; if(a) a.pause(); setAPlaying(false); setBarOpen(false); }
@@ -238,14 +243,16 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
       <div style={{marginTop:8,display:"flex",gap:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button><button className="btn sm pri" onClick={onApprove}>Approva e apri l’editor</button></div>
       <div className="audiobar">
         <button className="btn sm" onClick={startAudio}>▶ Ascolta l'audio</button>
+        <button className="btn sm pri" onClick={startMontage} title="Ascolta solo le frasi tenute, senza tagli e senza silenzi">▶ Ascolta il montato</button>
         {aMsg && <span style={{fontSize:12,color:"var(--muted)"}}>{aMsg}</span>}
-        <audio ref={audioRef} onLoadedMetadata={e=>setADur(e.currentTarget.duration||0)} onError={()=>setAMsg("Il browser non e' riuscito a caricare l'audio (link scaduto o formato non supportato).")} onTimeUpdate={e=>setAT(e.currentTarget.currentTime||0)} onEnded={()=>setAPlaying(false)} style={{display:"none"}}></audio>
+        <audio ref={audioRef} onLoadedMetadata={e=>setADur(e.currentTarget.duration||0)} onError={()=>setAMsg("Il browser non e' riuscito a caricare l'audio (link scaduto o formato non supportato).")} onTimeUpdate={onAudioTime} onEnded={()=>setAPlaying(false)} style={{display:"none"}}></audio>
       </div>
       {barOpen && <div className="playerbar">
         <button className="pbtn" onClick={playPause}>{aPlaying?"⏸":"▶"}</button>
         <span className="ptime mono">{fmtTC(aT)}</span>
         <div className="pseek" onClick={seekBar}><div className="pfill" style={{width:(aDur?Math.min(100,aT/aDur*100):0)+"%"}}></div></div>
         <span className="ptime mono">{fmtTC(aDur)}</span>
+        <span style={{fontSize:11,color:"var(--muted)",flexShrink:0}}>{montageMode?"montato":"intero"}</span>
         <button className="pclose" onClick={closeBar} title="Chiudi">×</button>
       </div>}
       <div className="lbl">Lista tagli</div>
