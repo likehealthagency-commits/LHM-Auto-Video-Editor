@@ -144,15 +144,14 @@ async function analyze(driveFileId){
   if(!tr) throw new Error("Trascrizione non trovata: trascrivi prima il video.");
   const segs0=(tr.segments||[]).slice().sort((a,b)=>(a.start||0)-(b.start||0));
   if(segs0.length===0) throw new Error("Nessun segmento nella trascrizione.");
-  const segs=refineSegments(segs0, tr.words||[], 0.55);
-  const decisions=await callLLM(segs);
-  const byId={}; decisions.forEach(d=>{ byId[d.i]=d; });
-  const enriched=segs.map(s=>{
-    const dec=byId[s.id]||{action:"keep",reason:"non valutato: tenuto per sicurezza"};
-    const action=dec.action==="discard"?"discard":"keep";
-    return { i:s.id, start:s.start, end:s.end, text:s.text, action, reason:dec.reason||"" };
-  });
-  const a={ version:2, createdAt:new Date().toISOString(), model:"gpt-4o-mini", driveFileId, source:tr.source||null, duration:tr.duration||null, coverage:tr.coverage||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
+  // ===== CERVELLO DISATTIVATO (tabula rasa) =====
+  // Mostriamo la trascrizione COSI' COM'E', tenendo tutto: nessuna decisione LLM,
+  // nessun raffinamento. Serve a valutare la SOLA qualita' della trascrizione.
+  // callLLM() e refineSegments() restano definiti, pronti per quando ricostruiremo
+  // il cervello da zero.
+  const segs=segs0;
+  const enriched=segs.map(s=>({ i:s.id, start:s.start, end:s.end, text:s.text, action:"keep", reason:"" }));
+  const a={ version:2, createdAt:new Date().toISOString(), model:"nessuno (cervello disattivato)", driveFileId, source:tr.source||null, duration:tr.duration||null, coverage:tr.coverage||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
   recompute(a);
   applySilence(a, tr.words||[]);
   await r2PutJson("analyses/"+driveFileId+".json", a);
