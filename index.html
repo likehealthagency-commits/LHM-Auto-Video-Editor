@@ -132,6 +132,10 @@
   .tnum:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-wash)}
   .miniplay{border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 7px;cursor:pointer;font-size:11px;color:var(--accent-ink)}
   .miniplay:hover{border-color:var(--accent)}
+  .tfield{display:inline-flex;align-items:stretch;gap:2px}
+  .tstep{display:flex;flex-direction:column;justify-content:center}
+  .tstep button{border:1px solid var(--line);background:#fff;font-size:7px;line-height:1;padding:0 4px;cursor:pointer;height:11px;color:var(--muted)}
+  .tstep button:hover{border-color:var(--accent);color:var(--accent)}
   .forcebox{margin-top:18px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:#FAFBFC}
   .forcerow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
   .forcemsg{margin-top:8px;font-size:13px;color:var(--accent-ink)}
@@ -176,6 +180,7 @@ async function analyzeApi(body){
 }
 async function forceApi(driveFileId,start,end){ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId,forceRange:{start,end}})}); }
 function parseClock(str){ str=String(str||"").trim(); if(!str) return NaN; if(str.indexOf(":")>=0){ const a=str.split(":"); return (parseFloat(a[0])||0)*60+(parseFloat(a[1])||0); } return parseFloat(str); }
+const _timeTimers={};
 function fmtDate(iso){ try{ return new Date(iso).toLocaleDateString("it-IT",{day:"numeric",month:"short",year:"numeric"});}catch(_){return "";} }
 function fmtTC(sec){ sec=Math.max(0,Math.round(sec||0)); const m=Math.floor(sec/60), s=sec%60; return m+":"+String(s).padStart(2,"0"); }
 function ordered(raws){ return (raws||[]).slice().sort((a,b)=>(a.order||0)-(b.order||0)); }
@@ -199,13 +204,17 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   const [aMsg,setAMsg]=useState("");
   const [aDur,setADur]=useState(0); const [barOpen,setBarOpen]=useState(false);
   const [montageMode,setMontageMode]=useState(false);
+  const [soloEnd,setSoloEnd]=useState(null);
   const [fStart,setFStart]=useState(""); const [fEnd,setFEnd]=useState(""); const [fMsg,setFMsg]=useState(""); const [fBusy,setFBusy]=useState(false);
   async function loadAudio(){ if(audioUrl) return audioUrl; setAMsg("Carico l'audio…"); try{ const d=await api("audioUrl",{driveFileId:data.driveFileId}); if(!d.url){ setAMsg("Audio non ancora salvato: ri-trascrivi questo video (la nuova trascrizione salva l'audio)."); return null; } setAudioUrl(d.url); setAMsg(""); return d.url; }catch(e){ setAMsg("Errore nel recupero audio: "+((e&&e.message)||e)); return null; } }
   const keepIvs=()=> (data.keep&&data.keep.length? data.keep : (data.keepRaw||[]));
   function onAudioTime(){ const a=audioRef.current; if(!a) return; const t=a.currentTime; setAT(t);
+    if(soloEnd!=null){ if(t>=soloEnd){ a.pause(); setAPlaying(false); setSoloEnd(null); } return; }
     if(montageMode){ const ivs=keepIvs(); if(ivs.length && !ivs.some(k=> t>=k.start-0.03 && t<k.end)){ const nx=ivs.find(k=> k.start>t-0.02); if(nx){ a.currentTime=nx.start; } else { a.pause(); setAPlaying(false); } } } }
-  async function startAudio(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setMontageMode(false); setBarOpen(true); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Il browser non riesce a riprodurre l'audio: "+(err&&err.message||err)); }); }
-  async function startMontage(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } const ivs=keepIvs(); setMontageMode(true); setBarOpen(true); if(ivs.length){ try{ a.currentTime=ivs[0].start; }catch(_){} } a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Riproduzione non riuscita: "+(err&&err.message||err)); }); }
+  async function playSegment(start,end){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setMontageMode(false); setSoloEnd(end); setBarOpen(true); try{ a.currentTime=start; }catch(_){}; setAT(start); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Riproduzione non riuscita: "+(err&&err.message||err)); }); }
+  function nudge(d,field,delta){ const base=(field==="start"?d.start:d.end); const nv=Math.max(0,Math.round((base+delta)*1000)/1000); const ns=(field==="start"?nv:d.start), ne=(field==="end"?nv:d.end); if(ne>ns) onSetTimes(d.i,ns,ne); }
+  async function startAudio(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setMontageMode(false); setSoloEnd(null); setBarOpen(true); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Il browser non riesce a riprodurre l'audio: "+(err&&err.message||err)); }); }
+  async function startMontage(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } const ivs=keepIvs(); setMontageMode(true); setSoloEnd(null); setBarOpen(true); if(ivs.length){ try{ a.currentTime=ivs[0].start; }catch(_){} } a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Riproduzione non riuscita: "+(err&&err.message||err)); }); }
   function playPause(){ const a=audioRef.current; if(!a) return; if(a.paused){ a.play().catch(()=>{}); setAPlaying(true); } else { a.pause(); setAPlaying(false); } }
   function seekBar(e){ const a=audioRef.current; if(!a||!aDur) return; const rect=e.currentTarget.getBoundingClientRect(); const p=(e.clientX-rect.left)/rect.width; const t=Math.max(0,Math.min(aDur,p*aDur)); a.currentTime=t; setAT(t); }
   function closeBar(){ const a=audioRef.current; if(a) a.pause(); setAPlaying(false); setBarOpen(false); }
@@ -274,10 +283,16 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
           <div key={d.i}>
             <div className={"cut "+d.action+(isActive(d)?" active":"")}>
               <div className="tc">
-                <button className="miniplay" onClick={()=>seekAudio(d.start)} title="Ascolta da qui">▶</button>
-                <input type="number" step="0.05" className="tnum" value={tval(d.i,"start",d.start)} onChange={e=>tchange(d.i,"start",e.target.value)} onBlur={()=>tcommit(d)} onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }} />
+                <button className="miniplay" onClick={()=>playSegment(d.start,d.end)} title="Ascolta solo questa frase">▶</button>
+                <span className="tfield">
+                  <input type="number" step="any" className="tnum" value={tval(d.i,"start",d.start)} onChange={e=>tchange(d.i,"start",e.target.value)} onBlur={()=>tcommit(d)} onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }} />
+                  <span className="tstep"><button onClick={()=>nudge(d,"start",0.05)}>▲</button><button onClick={()=>nudge(d,"start",-0.05)}>▼</button></span>
+                </span>
                 <span style={{color:"var(--muted)"}}>–</span>
-                <input type="number" step="0.05" className="tnum" value={tval(d.i,"end",d.end)} onChange={e=>tchange(d.i,"end",e.target.value)} onBlur={()=>tcommit(d)} onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }} />
+                <span className="tfield">
+                  <input type="number" step="any" className="tnum" value={tval(d.i,"end",d.end)} onChange={e=>tchange(d.i,"end",e.target.value)} onBlur={()=>tcommit(d)} onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }} />
+                  <span className="tstep"><button onClick={()=>nudge(d,"end",0.05)}>▲</button><button onClick={()=>nudge(d,"end",-0.05)}>▼</button></span>
+                </span>
               </div>
               <div className="bd">
                 <div className="txt">{d.text}</div>
@@ -398,7 +413,11 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
     try{ const d=await analyzeApi({driveFileId:raw.driveFileId,toggle:i}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,toggling:false,canUndo:d.canUndo,canRedo:d.canRedo}})); }
     catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],toggling:false}})); }
   }
-  async function setTimes(raw,i,start,end){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,setTimes:{i,start,end}}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo}})); }catch(e){ setErr(e.message); } }
+  function setTimes(raw,i,start,end){
+    setLive(L=>{ const cur=L[raw.id]; if(!cur||!cur.analysis) return L; const decs=(cur.analysis.decisions||[]).map(x=> x.i===i?{...x,start,end}:x); return {...L,[raw.id]:{...cur,analysis:{...cur.analysis,decisions:decs}}}; });
+    const key=raw.id+"-"+i; clearTimeout(_timeTimers[key]);
+    _timeTimers[key]=setTimeout(async()=>{ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,setTimes:{i,start,end}}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo}})); }catch(e){ setErr(e.message); } },500);
+  }
   async function undoEdit(raw){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,undo:true}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo,splitting:null}})); }catch(e){ setErr(e.message); } }
   async function redoEdit(raw){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,redo:true}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo,splitting:null}})); }catch(e){ setErr(e.message); } }
   async function startSplit(raw,i){
