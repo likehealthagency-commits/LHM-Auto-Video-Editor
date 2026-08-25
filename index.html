@@ -139,6 +139,12 @@
   .forcebox{margin-top:18px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:#FAFBFC}
   .forcerow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
   .forcemsg{margin-top:8px;font-size:13px;color:var(--accent-ink)}
+  .exportbox{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .exportmsg{font-size:13px;color:var(--muted)}
+  .qsel{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+  .enhrow{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);margin:-4px 0 14px;cursor:pointer}
+  .dllink{text-decoration:none;display:inline-flex;align-items:center;background:#0F9D58;color:#fff;border:none}
+  .dllink:hover{opacity:.9}
   .covinfo{margin-top:8px;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .tl .k.sel{outline:2px solid #fff;outline-offset:-1px}
   .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);margin-top:8px}
@@ -158,6 +164,7 @@ const TRANSCRIBE="/.netlify/functions/trascrivi-grezzo-background";
 const ANALYZE="/.netlify/functions/analizza";
 const STREAM_INGEST="/.netlify/functions/stream-ingest";
 const STREAM_BRIDGE="/.netlify/functions/stream-bridge-background";
+const EXPORT="/.netlify/functions/esporta-background";
 async function streamApi(action,driveFileId){
   const res=await fetch(STREAM_INGEST,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,driveFileId})});
   const d=await res.json().catch(()=>({})); if(!res.ok) throw new Error(d.error||("Errore "+res.status)); return d;
@@ -179,6 +186,7 @@ async function analyzeApi(body){
   const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data.error||("Errore "+res.status)); return data;
 }
 async function forceApi(driveFileId,start,end){ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId,forceRange:{start,end}})}); }
+async function exportApi(driveFileId,quality,format){ await fetch(EXPORT,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId,quality,format})}); }
 function parseClock(str){ str=String(str||"").trim(); if(!str) return NaN; if(str.indexOf(":")>=0){ const a=str.split(":"); return (parseFloat(a[0])||0)*60+(parseFloat(a[1])||0); } return parseFloat(str); }
 const _timeTimers={};
 function fmtDate(iso){ try{ return new Date(iso).toLocaleDateString("it-IT",{day:"numeric",month:"short",year:"numeric"});}catch(_){return "";} }
@@ -193,6 +201,39 @@ function Progress({startedAt}){
   const [pct,setPct]=useState(2);
   useEffect(()=>{ const t=setInterval(()=>{const el=Date.now()-startedAt;const p=Math.min(95,Math.round((el/EST_MS)*100));setPct(p<2?2:p);},800); return ()=>clearInterval(t); },[startedAt]);
   return <div><div className="bar"><i style={{width:pct+"%"}}></i></div><div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div></div>;
+}
+
+function ExportBox({driveFileId}){
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(""); const [url,setUrl]=useState(""); const [quality,setQuality]=useState("1080"); const [format,setFormat]=useState("original");
+  async function doExport(){
+    setBusy(true); setUrl(""); setMsg("Esportazione in corso… puo' richiedere qualche minuto (rimonta e ri-codifica il video).");
+    try{
+      await exportApi(driveFileId,quality,format);
+      let done=null;
+      for(let i=0;i<200 && !done;i++){ await new Promise(r=>setTimeout(r,4000)); try{ const d=await api("exportStatus",{driveFileId}); if(d.status && d.status.done) done=d.status; }catch(_){} }
+      if(done && done.error) setMsg("Errore nell'esportazione: "+done.error);
+      else if(done){ setUrl(done.url); setMsg("Pronto! "+(done.sizeMB?done.sizeMB+" MB":"")+(done.parts?" · "+done.parts+" spezzoni":"")); }
+      else setMsg("Sta impiegando piu' del previsto: attendi e riprova a controllare.");
+    }catch(e){ setMsg("Errore: "+e.message); }
+    setBusy(false);
+  }
+  return (
+    <div className="exportbox">
+      <span className="qsel"><span style={{fontSize:12,color:"var(--muted)"}}>Qualita’:</span>
+        {[["Alta","originale"],["1080p","1080"],["720p","720"]].map(o=>(
+          <button key={o[1]} className={"btn sm"+(quality===o[1]?" pri":"")} disabled={busy} onClick={()=>setQuality(o[1])}>{o[0]}</button>
+        ))}
+      </span>
+      <span className="qsel"><span style={{fontSize:12,color:"var(--muted)"}}>Formato:</span>
+        {[["Originale","original"],["9:16","9:16"],["1:1","1:1"],["4:5","4:5"],["16:9","16:9"]].map(o=>(
+          <button key={o[1]} className={"btn sm"+(format===o[1]?" pri":"")} disabled={busy} onClick={()=>setFormat(o[1])}>{o[0]}</button>
+        ))}
+      </span>
+      <button className="btn pri" disabled={busy} onClick={doExport}>{busy?"Esporto…":"⬇ Esporta video"}</button>
+      {url && <a className="btn sm dllink" href={url} target="_blank" rel="noopener noreferrer" download>Scarica il video</a>}
+      {msg && <span className="exportmsg">{msg}</span>}
+    </div>
+  );
 }
 
 function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onStartSplit,onDoSplit,onCancelSplit,words,splitting,onUndo,onRedo,canUndo,canRedo,onSetTimes}){
@@ -263,6 +304,7 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
       <div className="lbl">Script pulito</div>
       <div className="scriptbox">{data.cleanScript}</div>
       <div style={{marginTop:8,display:"flex",gap:8}}><button className="btn sm" onClick={copy}>{copied?"Copiato ✓":"Copia script"}</button><button className="btn sm pri" onClick={onApprove}>Approva e apri l’editor</button></div>
+      <ExportBox driveFileId={data.driveFileId} />
       <div className="audiobar">
         <button className="btn sm" onClick={startAudio}>▶ Ascolta l'audio</button>
         <button className="btn sm pri" onClick={startMontage} title="Ascolta solo le frasi tenute, senza tagli e senza silenzi">▶ Ascolta il montato</button>
@@ -365,6 +407,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
   const [link,setLink]=useState(""); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
   const [live,setLive]=useState({}); const pollRef=useRef(null);
   const [editing,setEditing]=useState(false); const [tempName,setTempName]=useState("");
+  const [enhanceAudio,setEnhanceAudio]=useState(true);
 
   async function load(){ try{ const d=await api("get",{projectId}); setProject(d.project); refreshStatuses(d.project);}catch(e){ setErr(e.message);} }
   async function refreshStatuses(prj){
@@ -397,7 +440,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
   async function delRaw(raw){ if(!confirm("Rimuovere questo grezzo dal progetto?"))return; try{ const d=await api("deleteRaw",{projectId,rawId:raw.id}); setProject(d.project);}catch(e){setErr(e.message);} }
   async function transcribe(raw){
     setLive(L=>({...L,[raw.id]:{...(L[raw.id]||{}),status:"working",startedAt:Date.now(),tx:null,error:null,analysis:null}}));
-    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId})}); }
+    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId,enhance:enhanceAudio})}); }
     catch(e){ setLive(L=>({...L,[raw.id]:{...L[raw.id],status:"error",error:"Avvio non riuscito: "+e.message}})); }
   }
   async function viewTx(raw){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); setLive(L=>({...L,[raw.id]:{...L[raw.id],tx:d.transcript}}));}catch(e){ setErr(e.message);} }
@@ -460,6 +503,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
         <input className="field" placeholder="Incolla il link Drive del grezzo…" value={link} onChange={e=>setLink(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addRaw();}} />
         <button className="btn pri" onClick={addRaw} disabled={busy||!link.trim()}>{busy?<span className="spin"></span>:"Aggiungi"}</button>
       </div>
+      <label className="enhrow"><input type="checkbox" checked={enhanceAudio} onChange={e=>setEnhanceAudio(e.target.checked)} /> Pulisci l’audio prima di trascrivere (togli rumori e normalizza il volume)</label>
       {raws.length===0
         ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
         : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} onUndo={undoEdit} onRedo={redoEdit} onSetTimes={setTimes} live={liveFor(r)} />)}</div>}
@@ -654,6 +698,7 @@ function Editor({driveFileId,name,onBack}){
             </div>
           )}
           <div className="legend"><span><i style={{background:"var(--accent)"}}></i>Tenuto</span><span><i style={{background:"#20242B"}}></i>Tagliato</span></div>
+          <ExportBox driveFileId={driveFileId} />
         </div>
       )}
     </div>

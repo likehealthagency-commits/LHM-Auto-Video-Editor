@@ -12,3 +12,7 @@
 [functions."proxy-background"]
   included_files = ["node_modules/ffmpeg-static/**"]
   external_node_modules = ["ffmpeg-static"]
+
+[functions."esporta-background"]
+  included_files = ["node_modules/ffmpeg-static/**"]
+  external_node_modules = ["ffmpeg-static"]
