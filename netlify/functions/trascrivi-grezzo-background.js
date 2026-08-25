@@ -36,10 +36,13 @@ async function getFileMeta(token, fileId){
   if(!res.ok) throw new Error("Drive meta " + res.status + " " + (await res.text()).slice(0,140));
   return res.json();
 }
-function extractAudioFromDriveUrl(token, driveFileId, outAudioPath){
+function extractAudioFromDriveUrl(token, driveFileId, outAudioPath, enhance){
   return new Promise((resolve, reject) => {
     const url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(driveFileId) + "?alt=media&supportsAllDrives=true";
-    const ff = spawn(ffmpegPath, [ "-y", "-headers", "Authorization: Bearer " + token + "\r\n", "-i", url, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", outAudioPath ]);
+    const args = [ "-y", "-headers", "Authorization: Bearer " + token + "\r\n", "-i", url, "-vn" ];
+    if(enhance){ args.push("-af", "highpass=f=80,afftdn=nr=12:nf=-25,dynaudnorm=f=200:g=5"); }
+    args.push("-ac", "1", "-ar", "16000", "-b:a", "64k", outAudioPath);
+    const ff = spawn(ffmpegPath, args);
     let err = ""; ff.stderr.on("data", (d)=>{ err += d.toString(); });
     ff.on("error", reject);
     ff.on("close", (code)=> code === 0 ? resolve() : reject(new Error("ffmpeg " + code + ": " + err.slice(-300))));
@@ -354,7 +357,9 @@ exports.handler = async (event) => {
     if(!String(meta.mimeType||"").startsWith("video/")) throw new Error("Il file non e' un video (" + meta.mimeType + ").");
 
     console.log("Estraggo l'audio da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
-    await extractAudioFromDriveUrl(token, driveFileId, aud);
+    const enhance = body.enhance !== false; // pulizia audio attiva salvo esplicito spegnimento
+    console.log(enhance ? "Estraggo e PULISCO l'audio (togli rumori + normalizzo)..." : "Estraggo l'audio (senza pulizia)...");
+    await extractAudioFromDriveUrl(token, driveFileId, aud, enhance);
 
     let sizeMB = 0; try { sizeMB = fs.statSync(aud).size / 1048576; } catch(_){ sizeMB = 0; }
     console.log("Audio " + sizeMB.toFixed(2) + " MB -> Whisper...");
