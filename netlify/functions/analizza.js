@@ -238,6 +238,21 @@ exports.handler = async (event) => {
       await r2PutJson("analyses/"+id+".json", a);
       return await respondWith(id, a);
     }
+    // modifica i tempi (inizio/fine) di un segmento, per correggere bordi tagliati troppo/troppo poco
+    if(p.setTimes && p.setTimes.i!==undefined && p.setTimes.i!==null){
+      const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
+      const dec=(a.decisions||[]).find(x=>x.i===p.setTimes.i); if(!dec) throw new Error("Segmento non trovato.");
+      const ns=+p.setTimes.start, ne=+p.setTimes.end;
+      if(isNaN(ns)||isNaN(ne)||ne<=ns) throw new Error("Tempi non validi.");
+      await pushHistory(id, JSON.parse(JSON.stringify(a)));
+      dec.start=ns; dec.end=ne;
+      a.decisions.sort((x,y)=>(x.start||0)-(y.start||0));
+      recompute(a);
+      const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[], (tr&&tr.silences)||[]);
+      delete a.keepManual; a.manualKeep=false; a.edited=true;
+      await r2PutJson("analyses/"+id+".json", a);
+      return await respondWith(id, a);
+    }
     // divide un segmento in due parti al tempo indicato (per separare parte buona e ripetizione)
     if(p.split && p.split.i!==undefined && p.split.atTime!==undefined){
       const a=await r2GetJson("analyses/"+id+".json"); if(!a) throw new Error("Analisi non trovata.");
