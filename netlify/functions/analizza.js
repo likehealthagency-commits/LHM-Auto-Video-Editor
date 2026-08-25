@@ -42,17 +42,17 @@ async function r2PutJson(key,obj){ const r=await r2Fetch("PUT",key,JSON.stringif
 
 // ---------- LLM ----------
 const SYSTEM = [
-"Sei un assistente di montaggio video. Ricevi la trascrizione di un video GREZZO non montato, diviso in segmenti numerati.",
-"Il grezzo contiene: false partenze, frasi interrotte e subito riprese, ripetizioni dello stesso concetto (ri-registrazioni dello stesso pezzo), intercalari e sbavature.",
-"Il tuo compito: per OGNI segmento decidere se TENERLO (keep) o SCARTARLO (discard), per ottenere un montato lineare e pulito che mantenga il senso del discorso.",
+"Sei un assistente di montaggio video. Ricevi la trascrizione di un video GREZZO, divisa in segmenti numerati nell'ordine in cui sono stati detti (id piu' basso = prima nel tempo).",
+"Il tuo compito: per OGNI segmento decidere se TENERLO (keep) o SCARTARLO (discard), in modo che i segmenti TENUTI, letti in fila, formino un discorso PULITO, LINEARE e di SENSO COMPIUTO.",
+"Non cancelli niente davvero: proponi solo cosa scartare. L'utente potra' recuperare a mano cio' che vuole.",
 "Regole:",
-"- RI-REGISTRAZIONI (regola importante): quando due o piu' segmenti dicono la STESSA cosa o quasi (la persona ha ripetuto la frase per dirla meglio), TIENI SEMPRE l'ULTIMA versione, cioe' quella piu' avanti nel tempo (id piu' alto), e SCARTA quelle precedenti. Chi ri-registra lo fa per correggersi: l'ultima ripetizione e' quasi sempre quella buona. NON tenere mai la prima di una serie di ripetizioni simili.",
-"- NON scartare un segmento che contiene anche informazioni NUOVE, UTILI o UNICHE solo perche' una parte ripete qualcosa gia' detto: nel dubbio TIENILO (l'utente potra' dividerlo e rifinirlo a mano).",
-"- SCARTA false partenze, frasi troncate e riprese, ripetizioni evidenti, sbavature.",
-"- TIENI i segmenti che compongono il discorso finale coerente.",
-"- Nel DUBBIO, TIENI e spiega il dubbio nel motivo (meglio lasciare da rifinire a mano che perdere contenuto buono).",
-"- NON riscrivere il testo: decidi solo keep o discard.",
-"- Ogni 'reason': una riga breve, in italiano.",
+"- DOPPIONI / RI-REGISTRAZIONI (regola piu' importante): se lo stesso contenuto compare piu' volte (stessa frase o stesso concetto, anche con parole un po' diverse), TIENI SEMPRE L'ULTIMA volta che compare (id piu' alto) e SCARTA tutte le precedenti. Durante la registrazione la persona ripete la stessa frase finche' non le viene bene: l'ultima e' quella buona. NON tenere mai una versione precedente se piu' avanti ne esiste una equivalente.",
+"- FALSE PARTENZE: se una frase viene iniziata, interrotta e poi ripresa/rifatta, SCARTA il tentativo interrotto e TIENI la versione completa.",
+"- TIENI tutti i segmenti che servono a comporre il discorso finale coerente.",
+"- NON scartare un segmento solo perche' contiene una ripetizione al suo interno, se contiene anche informazione utile o unica: in quel caso TIENILO.",
+"- NON devi unire, dividere o riscrivere i segmenti: valuti ciascun segmento cosi' com'e' e decidi solo keep o discard.",
+"- Nel DUBBIO, TIENI.",
+"- Ogni 'reason': una riga brevissima in italiano (es. 'ripetuta meglio dopo', 'falsa partenza', 'tenuto: unico').",
 "Rispondi SOLO con un oggetto JSON in questo formato esatto:",
 '{"decisions":[{"i":<numero del segmento>,"action":"keep" oppure "discard","reason":"..."}]}',
 "Includi TUTTI i segmenti ricevuti, una decisione per ciascuno, nello stesso ordine."
@@ -144,14 +144,17 @@ async function analyze(driveFileId){
   if(!tr) throw new Error("Trascrizione non trovata: trascrivi prima il video.");
   const segs0=(tr.segments||[]).slice().sort((a,b)=>(a.start||0)-(b.start||0));
   if(segs0.length===0) throw new Error("Nessun segmento nella trascrizione.");
-  // ===== CERVELLO DISATTIVATO (tabula rasa) =====
-  // Mostriamo la trascrizione COSI' COM'E', tenendo tutto: nessuna decisione LLM,
-  // nessun raffinamento. Serve a valutare la SOLA qualita' della trascrizione.
-  // callLLM() e refineSegments() restano definiti, pronti per quando ricostruiremo
-  // il cervello da zero.
+  // ===== CERVELLO =====
+  // Lavora sui segmenti della trascrizione COSI' COME SONO (niente unione/divisione).
+  // Propone cosa scartare (keep/discard): non cancella nulla, l'utente recupera a mano.
   const segs=segs0;
-  const enriched=segs.map(s=>({ i:s.id, start:s.start, end:s.end, text:s.text, action:"keep", reason:"" }));
-  const a={ version:2, createdAt:new Date().toISOString(), model:"nessuno (cervello disattivato)", driveFileId, source:tr.source||null, duration:tr.duration||null, coverage:tr.coverage||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
+  const decisions=await callLLM(segs);
+  const byId={}; decisions.forEach(d=>{ byId[d.i]=d; });
+  const enriched=segs.map(s=>{
+    const dec=byId[s.id]||{action:"keep",reason:""};
+    return { i:s.id, start:s.start, end:s.end, text:s.text, action:(dec.action==="discard"?"discard":"keep"), reason:dec.reason||"" };
+  });
+  const a={ version:2, createdAt:new Date().toISOString(), model:"gpt-4o-mini", driveFileId, source:tr.source||null, duration:tr.duration||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
   recompute(a);
   applySilence(a, tr.words||[]);
   await r2PutJson("analyses/"+driveFileId+".json", a);
