@@ -280,14 +280,6 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
       </div>
       <div className="forcebox">
         <div className="lbl">Manca un pezzo? Forza la trascrizione di un intervallo</div>
-        {data.coverage && <div className="covinfo">
-          {data.coverage.holesAfter>0.4
-            ? <span>Il sistema segnala <b>~{data.coverage.holesAfter}s</b> di parlato ancora scoperto{data.coverage.holes&&data.coverage.holes.length>0?" nelle zone:":"."}</span>
-            : <span>Copertura del parlato: <b>completa</b> (nessuna zona scoperta rilevata).</span>}
-          {data.coverage.holes && data.coverage.holes.map((h,i)=>(
-            <button key={i} className="btn sm ghost" title="Clicca per forzare questa zona" onClick={()=>{ setFStart(fmtTC(h.start)); setFEnd(fmtTC(Math.ceil(h.end))); }}>{fmtTC(h.start)}–{fmtTC(h.end)}</button>
-          ))}
-        </div>}
         <div className="forcerow">
           <label>Da <input className="tinput" placeholder="m:ss" value={fStart} onChange={e=>setFStart(e.target.value)} /></label>
           <label>A <input className="tinput" placeholder="m:ss" value={fEnd} onChange={e=>setFEnd(e.target.value)} /></label>
