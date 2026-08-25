@@ -47,12 +47,16 @@ const SYSTEM = [
 "Non cancelli niente davvero: proponi solo cosa scartare. L'utente potra' recuperare a mano cio' che vuole.",
 "Regole:",
 "- DOPPIONI / RI-REGISTRAZIONI (regola piu' importante): se lo stesso contenuto compare piu' volte (stessa frase o stesso concetto, anche con parole un po' diverse), TIENI SEMPRE L'ULTIMA volta che compare (id piu' alto) e SCARTA tutte le precedenti. Durante la registrazione la persona ripete la stessa frase finche' non le viene bene: l'ultima e' quella buona. NON tenere mai una versione precedente se piu' avanti ne esiste una equivalente.",
+"- TENTATIVI SPEZZATI (caso importante): un tentativo puo' essere SPEZZATO su piu' segmenti consecutivi corti (la persona parte, si interrompe, ricomincia). Quei frammenti consecutivi INSIEME sono UN SOLO tentativo. Se lo stesso contenuto viene poi ridetto in modo COMPLETO e fluido (di solito piu' avanti), scarta TUTTI i frammenti del tentativo precedente e tieni la versione completa successiva.",
+"- Non tenere MAI frammenti isolati (mezze frasi, singole parole staccate) che appartengono a un tentativo che stai scartando: o tieni il tentativo INTERO (se e' la versione buona) oppure lo scarti INTERO. Non mescolare pezzi di tentativi diversi.",
+"- Confronta il CONTENUTO, non la forma: due tentativi possono essere divisi in segmenti in modo diverso (uno spezzato, uno intero) ed essere comunque la STESSA cosa detta due volte. In quel caso vale sempre: tieni l'ultima versione completa, scarta le precedenti.",
 "- FALSE PARTENZE: se una frase viene iniziata, interrotta e poi ripresa/rifatta, SCARTA il tentativo interrotto e TIENI la versione completa.",
 "- TIENI tutti i segmenti che servono a comporre il discorso finale coerente.",
 "- NON scartare un segmento solo perche' contiene una ripetizione al suo interno, se contiene anche informazione utile o unica: in quel caso TIENILO.",
 "- NON devi unire, dividere o riscrivere i segmenti: valuti ciascun segmento cosi' com'e' e decidi solo keep o discard.",
 "- Nel DUBBIO, TIENI.",
 "- Ogni 'reason': una riga brevissima in italiano (es. 'ripetuta meglio dopo', 'falsa partenza', 'tenuto: unico').",
+"Prima di rispondere, ragiona internamente: raggruppa i segmenti che dicono lo STESSO contenuto (anche se uno e' spezzato e l'altro intero), individua per ogni gruppo la versione buona (l'ultima completa), e solo allora produci le decisioni coerenti con questo ragionamento.",
 "Rispondi SOLO con un oggetto JSON in questo formato esatto:",
 '{"decisions":[{"i":<numero del segmento>,"action":"keep" oppure "discard","reason":"..."}]}',
 "Includi TUTTI i segmenti ricevuti, una decisione per ciascuno, nello stesso ordine."
@@ -64,7 +68,7 @@ async function callLLM(segments){
   const res=await fetch("https://api.openai.com/v1/chat/completions",{
     method:"POST",
     headers:{ "Authorization":"Bearer "+key, "Content-Type":"application/json" },
-    body:JSON.stringify({ model:"gpt-4o-mini", temperature:0, response_format:{type:"json_object"}, messages:[{role:"system",content:SYSTEM},{role:"user",content:"Segmenti:\n"+userPayload}] })
+    body:JSON.stringify({ model:"gpt-4o", temperature:0, max_tokens:16000, response_format:{type:"json_object"}, messages:[{role:"system",content:SYSTEM},{role:"user",content:"Segmenti:\n"+userPayload}] })
   });
   const d=await res.json().catch(()=>({}));
   if(!res.ok) throw new Error("OpenAI "+res.status+" "+JSON.stringify(d).slice(0,160));
@@ -154,7 +158,7 @@ async function analyze(driveFileId){
     const dec=byId[s.id]||{action:"keep",reason:""};
     return { i:s.id, start:s.start, end:s.end, text:s.text, action:(dec.action==="discard"?"discard":"keep"), reason:dec.reason||"" };
   });
-  const a={ version:2, createdAt:new Date().toISOString(), model:"gpt-4o-mini", driveFileId, source:tr.source||null, duration:tr.duration||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
+  const a={ version:2, createdAt:new Date().toISOString(), model:"gpt-4o", driveFileId, source:tr.source||null, duration:tr.duration||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
   recompute(a);
   applySilence(a, tr.words||[]);
   await r2PutJson("analyses/"+driveFileId+".json", a);
