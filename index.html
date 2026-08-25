@@ -127,7 +127,11 @@
   .playerbar .pfill{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:4px}
   .playerbar .pclose{border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;color:var(--muted);flex-shrink:0}
   .cut.active{outline:2px solid var(--accent);outline-offset:-1px;background:var(--accent-wash)}
-  .cut .tc{cursor:pointer}
+  .cut .tc{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+  .tnum{font-family:"IBM Plex Mono";font-size:12px;width:78px;padding:3px 5px;border:1px solid var(--line);border-radius:6px}
+  .tnum:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-wash)}
+  .miniplay{border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 7px;cursor:pointer;font-size:11px;color:var(--accent-ink)}
+  .miniplay:hover{border-color:var(--accent)}
   .forcebox{margin-top:18px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:#FAFBFC}
   .forcerow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
   .forcemsg{margin-top:8px;font-size:13px;color:var(--accent-ink)}
@@ -186,7 +190,7 @@ function Progress({startedAt}){
   return <div><div className="bar"><i style={{width:pct+"%"}}></i></div><div className="barlabel"><span>Elaborazione…</span><span className="mono">{pct}%</span></div></div>;
 }
 
-function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onStartSplit,onDoSplit,onCancelSplit,words,splitting,onUndo,onRedo,canUndo,canRedo}){
+function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onStartSplit,onDoSplit,onCancelSplit,words,splitting,onUndo,onRedo,canUndo,canRedo,onSetTimes}){
   const [copied,setCopied]=useState(false);
   function copy(){ try{ navigator.clipboard.writeText(data.cleanScript); setCopied(true); setTimeout(()=>setCopied(false),1500);}catch(_){}}
   function segWords(d){ return (words||[]).filter(w=> w.start>=d.start-0.01 && w.start<d.end+0.01).sort((a,b)=>a.start-b.start); }
@@ -207,6 +211,15 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   function closeBar(){ const a=audioRef.current; if(a) a.pause(); setAPlaying(false); setBarOpen(false); }
   async function seekAudio(t){ const a=audioRef.current; if(!a) return; if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setBarOpen(true); try{ a.currentTime=t; }catch(_){}; setAT(t); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Riproduzione non riuscita: "+(err&&err.message||err)); }); }
   function isActive(d){ return aT>=d.start-0.02 && aT<d.end; }
+  const [draftT,setDraftT]=useState({});
+  function tval(i,field,cur){ const k=i+"-"+field; return draftT[k]!==undefined ? draftT[k] : (cur||0).toFixed(3); }
+  function tchange(i,field,v){ setDraftT(d=>({...d,[i+"-"+field]:v})); }
+  function tcommit(d){
+    const sv=draftT[d.i+"-start"], ev=draftT[d.i+"-end"];
+    const ns=(sv!==undefined?parseFloat(sv):d.start), ne=(ev!==undefined?parseFloat(ev):d.end);
+    setDraftT(dd=>{ const c={...dd}; delete c[d.i+"-start"]; delete c[d.i+"-end"]; return c; });
+    if(!isNaN(ns)&&!isNaN(ne)&&ne>ns && (ns!==d.start||ne!==d.end)) onSetTimes(d.i,ns,ne);
+  }
   async function doForce(){
     const sc=parseClock(fStart), ec=parseClock(fEnd);
     if(isNaN(sc)||isNaN(ec)||ec<=sc){ setFMsg("Intervallo non valido: usa il formato m:ss (es. 0:52)."); return; }
@@ -249,9 +262,9 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
       </div>
       {barOpen && <div className="playerbar">
         <button className="pbtn" onClick={playPause}>{aPlaying?"⏸":"▶"}</button>
-        <span className="ptime mono">{fmtTC(aT)}</span>
+        <span className="ptime mono">{fmtMs(aT)}</span>
         <div className="pseek" onClick={seekBar}><div className="pfill" style={{width:(aDur?Math.min(100,aT/aDur*100):0)+"%"}}></div></div>
-        <span className="ptime mono">{fmtTC(aDur)}</span>
+        <span className="ptime mono">{fmtMs(aDur)}</span>
         <span style={{fontSize:11,color:"var(--muted)",flexShrink:0}}>{montageMode?"montato":"intero"}</span>
         <button className="pclose" onClick={closeBar} title="Chiudi">×</button>
       </div>}
@@ -260,7 +273,12 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
         {data.decisions.map(d=>(
           <div key={d.i}>
             <div className={"cut "+d.action+(isActive(d)?" active":"")}>
-              <div className="tc" onClick={()=>seekAudio(d.start)} title="Ascolta da qui">{fmtTC(d.start)} – {fmtTC(d.end)}</div>
+              <div className="tc">
+                <button className="miniplay" onClick={()=>seekAudio(d.start)} title="Ascolta da qui">▶</button>
+                <input type="number" step="0.05" className="tnum" value={tval(d.i,"start",d.start)} onChange={e=>tchange(d.i,"start",e.target.value)} onBlur={()=>tcommit(d)} onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }} />
+                <span style={{color:"var(--muted)"}}>–</span>
+                <input type="number" step="0.05" className="tnum" value={tval(d.i,"end",d.end)} onChange={e=>tchange(d.i,"end",e.target.value)} onBlur={()=>tcommit(d)} onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }} />
+              </div>
               <div className="bd">
                 <div className="txt">{d.text}</div>
                 {d.reason && <div className="rs">{d.reason}</div>}
@@ -299,7 +317,7 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   );
 }
 
-function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,onStartSplit,onDoSplit,onCancelSplit,onUndo,onRedo,live}){
+function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,onStartSplit,onDoSplit,onCancelSplit,onUndo,onRedo,onSetTimes,live}){
   const status=live.status||raw.status||"queued";
   return (
     <div className="take">
@@ -321,7 +339,7 @@ function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,o
       {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
       {live.tx && (<div className="tx"><p>{live.tx.text}</p><div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div></div>)}
       {live.analyzing && !live.analysis && <div style={{marginTop:12,color:"var(--muted)",fontSize:13}}><span className="spin"></span> Il cervello sta leggendo la trascrizione…</div>}
-      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} onResilence={(th)=>onResilence(raw,th)} resilencing={!!live.resilencing} onStartSplit={(i)=>onStartSplit(raw,i)} onDoSplit={(i,at)=>onDoSplit(raw,i,at)} onCancelSplit={()=>onCancelSplit(raw)} words={live.words||[]} splitting={live.splitting} onUndo={()=>onUndo(raw)} onRedo={()=>onRedo(raw)} canUndo={!!live.canUndo} canRedo={!!live.canRedo} />}
+      {live.analysis && <Analysis data={live.analysis} onToggle={(i)=>onToggle(raw,i)} toggling={!!live.toggling} onApprove={()=>onApprove(raw)} onResilence={(th)=>onResilence(raw,th)} resilencing={!!live.resilencing} onStartSplit={(i)=>onStartSplit(raw,i)} onDoSplit={(i,at)=>onDoSplit(raw,i,at)} onCancelSplit={()=>onCancelSplit(raw)} words={live.words||[]} splitting={live.splitting} onUndo={()=>onUndo(raw)} onRedo={()=>onRedo(raw)} canUndo={!!live.canUndo} canRedo={!!live.canRedo} onSetTimes={(i,st,en)=>onSetTimes(raw,i,st,en)} />}
       {status==="error" && live.error && <div className="banner" style={{marginTop:10,marginBottom:0}}>{live.error}</div>}
     </div>
   );
@@ -380,6 +398,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
     try{ const d=await analyzeApi({driveFileId:raw.driveFileId,toggle:i}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,toggling:false,canUndo:d.canUndo,canRedo:d.canRedo}})); }
     catch(e){ setErr(e.message); setLive(L=>({...L,[raw.id]:{...L[raw.id],toggling:false}})); }
   }
+  async function setTimes(raw,i,start,end){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,setTimes:{i,start,end}}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo}})); }catch(e){ setErr(e.message); } }
   async function undoEdit(raw){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,undo:true}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo,splitting:null}})); }catch(e){ setErr(e.message); } }
   async function redoEdit(raw){ try{ const d=await analyzeApi({driveFileId:raw.driveFileId,redo:true}); setLive(L=>({...L,[raw.id]:{...L[raw.id],analysis:d.analysis,canUndo:d.canUndo,canRedo:d.canRedo,splitting:null}})); }catch(e){ setErr(e.message); } }
   async function startSplit(raw,i){
@@ -424,7 +443,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
       </div>
       {raws.length===0
         ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
-        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} onUndo={undoEdit} onRedo={redoEdit} live={liveFor(r)} />)}</div>}
+        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} onUndo={undoEdit} onRedo={redoEdit} onSetTimes={setTimes} live={liveFor(r)} />)}</div>}
     </div>
   );
 }
