@@ -40,7 +40,7 @@ function extractAudioFromDriveUrl(token, driveFileId, outAudioPath, enhance){
   return new Promise((resolve, reject) => {
     const url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(driveFileId) + "?alt=media&supportsAllDrives=true";
     const args = [ "-y", "-headers", "Authorization: Bearer " + token + "\r\n", "-i", url, "-vn" ];
-    if(enhance){ args.push("-af", "highpass=f=80,afftdn=nr=12:nf=-25,dynaudnorm=f=200:g=5"); }
+    if(enhance){ args.push("-af", "highpass=f=80,afftdn=nr=6,dynaudnorm=f=250:g=15:m=3"); }
     args.push("-ac", "1", "-ar", "16000", "-b:a", "64k", outAudioPath);
     const ff = spawn(ffmpegPath, args);
     let err = ""; ff.stderr.on("data", (d)=>{ err += d.toString(); });
