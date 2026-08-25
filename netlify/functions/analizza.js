@@ -110,8 +110,24 @@ function mergeKeepRaw(decisions){
 function sumDur(iv){ return (iv||[]).reduce((s,x)=>s+(x.end-x.start),0); }
 
 // dentro ogni intervallo tenuto, spezza dove c'e' una pausa tra parole oltre soglia
-function computeTight(keepRaw, words, threshold){
-  const out=[];
+// toglie da un intervallo le sottoparti che sono silenzio reale (lasciando un po' di respiro ai bordi)
+function subtractSil(iv, silences, pad, minSil){
+  let segs=[{start:iv.start, end:iv.end}];
+  for(const s of (silences||[])){
+    const ss=s.start+pad, se=s.end-pad;
+    if(se-ss < minSil) continue;
+    const next=[];
+    for(const g of segs){
+      if(se<=g.start || ss>=g.end){ next.push(g); continue; }
+      if(ss>g.start) next.push({start:g.start, end:Math.min(ss,g.end)});
+      if(se<g.end) next.push({start:Math.max(se,g.start), end:g.end});
+    }
+    segs=next;
+  }
+  return segs;
+}
+function computeTight(keepRaw, words, threshold, silences){
+  let out=[];
   for(const iv of (keepRaw||[])){
     const ws=(words||[]).filter(w=> w.start>=iv.start-0.01 && w.start<iv.end+0.01).sort((a,b)=>a.start-b.start);
     if(ws.length===0){ out.push({start:iv.start,end:iv.end}); continue; }
@@ -125,6 +141,12 @@ function computeTight(keepRaw, words, threshold){
     cur.end=Math.min(iv.end, cur.end);
     out.push(cur);
   }
+  // pulizia extra: togli i silenzi REALI residui (quelli che le pause tra parole non prendono)
+  if(threshold < 9999 && silences && silences.length){
+    const out2=[];
+    for(const iv of out){ for(const sub of subtractSil(iv, silences, 0.12, 0.35)) out2.push(sub); }
+    out=out2;
+  }
   return out.filter(iv=> iv.end-iv.start > 0.05);
 }
 
@@ -136,9 +158,9 @@ function recompute(a){
   a.stats={ total:decs.length, kept:kept.length, discarded:decs.length-kept.length };
   return a;
 }
-function applySilence(a, words){
+function applySilence(a, words, silences){
   const th=(typeof a.silenceThreshold==="number")?a.silenceThreshold:DEFAULT_SIL;
-  a.keep=computeTight(a.keepRaw||[], words||[], th);
+  a.keep=computeTight(a.keepRaw||[], words||[], th, silences||[]);
   a.silenceCutSeconds=Math.max(0, Math.round(sumDur(a.keepRaw||[]) - sumDur(a.keep)));
   return a;
 }
@@ -160,7 +182,7 @@ async function analyze(driveFileId){
   });
   const a={ version:2, createdAt:new Date().toISOString(), model:"gpt-4o", driveFileId, source:tr.source||null, duration:tr.duration||null, decisions:enriched, silenceThreshold:DEFAULT_SIL };
   recompute(a);
-  applySilence(a, tr.words||[]);
+  applySilence(a, tr.words||[], tr.silences||[]);
   await r2PutJson("analyses/"+driveFileId+".json", a);
   return a;
 }
@@ -210,7 +232,7 @@ exports.handler = async (event) => {
       await pushHistory(id, JSON.parse(JSON.stringify(a)));
       dec.action=dec.action==="keep"?"discard":"keep";
       recompute(a);
-      const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[]);
+      const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[], (tr&&tr.silences)||[]);
       delete a.keepManual; a.manualKeep=false;
       a.edited=true; a.editedAt=new Date().toISOString();
       await r2PutJson("analyses/"+id+".json", a);
@@ -231,7 +253,7 @@ exports.handler = async (event) => {
       a.decisions.splice(idx,1,partA,partB);
       a.decisions.sort((x,y)=>(x.start||0)-(y.start||0));
       a.decisions.forEach((d,k)=>{ d.i=k; });
-      recompute(a); applySilence(a, words);
+      recompute(a); applySilence(a, words, (tr&&tr.silences)||[]);
       delete a.keepManual; a.manualKeep=false; a.edited=true;
       await r2PutJson("analyses/"+id+".json", a);
       return await respondWith(id, a);
@@ -242,7 +264,7 @@ exports.handler = async (event) => {
       await pushHistory(id, JSON.parse(JSON.stringify(a)));
       a.silenceThreshold=+p.silence;
       if(!a.keepRaw) recompute(a);
-      const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[]);
+      const tr=await r2GetJson("transcripts/"+id+".json"); applySilence(a, (tr&&tr.words)||[], (tr&&tr.silences)||[]);
       delete a.keepManual; a.manualKeep=false;
       await r2PutJson("analyses/"+id+".json", a);
       return await respondWith(id, a);

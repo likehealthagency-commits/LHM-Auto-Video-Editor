@@ -408,7 +408,8 @@ exports.handler = async (event) => {
       segments,
       words,
       recovered,
-      coverage
+      coverage,
+      silences: (audioMap.silences||[]).map(function(x){ return { start:+x.start.toFixed(2), end:+x.end.toFixed(2) }; })
     };
     const objectKey = "transcripts/" + driveFileId + ".json";
     await putToR2(objectKey, JSON.stringify(transcriptObj, null, 2));
