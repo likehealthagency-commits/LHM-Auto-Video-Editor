@@ -249,9 +249,21 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   const [fStart,setFStart]=useState(""); const [fEnd,setFEnd]=useState(""); const [fMsg,setFMsg]=useState(""); const [fBusy,setFBusy]=useState(false);
   async function loadAudio(){ if(audioUrl) return audioUrl; setAMsg("Carico l'audio…"); try{ const d=await api("audioUrl",{driveFileId:data.driveFileId}); if(!d.url){ setAMsg("Audio non ancora salvato: ri-trascrivi questo video (la nuova trascrizione salva l'audio)."); return null; } setAudioUrl(d.url); setAMsg(""); return d.url; }catch(e){ setAMsg("Errore nel recupero audio: "+((e&&e.message)||e)); return null; } }
   const keepIvs=()=> (data.keep&&data.keep.length? data.keep : (data.keepRaw||[]));
-  function onAudioTime(){ const a=audioRef.current; if(!a) return; const t=a.currentTime; setAT(t);
-    if(soloEnd!=null){ if(t>=soloEnd){ a.pause(); setAPlaying(false); setSoloEnd(null); } return; }
-    if(montageMode){ const ivs=keepIvs(); if(ivs.length && !ivs.some(k=> t>=k.start-0.03 && t<k.end)){ const nx=ivs.find(k=> k.start>t-0.02); if(nx){ a.currentTime=nx.start; } else { a.pause(); setAPlaying(false); } } } }
+  const keepRef=useRef([]); keepRef.current=keepIvs();
+  const soloRef=useRef(null); soloRef.current=soloEnd;
+  const montRef=useRef(false); montRef.current=montageMode;
+  useEffect(()=>{
+    const id=setInterval(()=>{
+      const a=audioRef.current; if(!a || a.paused) return;
+      const t=a.currentTime;
+      if(soloRef.current!=null){ if(t>=soloRef.current){ a.pause(); setAPlaying(false); setSoloEnd(null); } return; }
+      if(!montRef.current) return;
+      const ivs=keepRef.current;
+      if(ivs.length && !ivs.some(k=> t>=k.start-0.03 && t<k.end)){ const nx=ivs.find(k=> k.start>t-0.01); if(nx){ try{ a.currentTime=nx.start; }catch(_){} } else { a.pause(); setAPlaying(false); } }
+    },30);
+    return ()=>clearInterval(id);
+  },[]);
+  function onAudioTime(){ const a=audioRef.current; if(!a) return; setAT(a.currentTime); }
   async function playSegment(start,end){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setSoloEnd(end); setBarOpen(true); try{ a.currentTime=start; }catch(_){}; setAT(start); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Riproduzione non riuscita: "+(err&&err.message||err)); }); }
   function nudge(d,field,delta){ const base=(field==="start"?d.start:d.end); const nv=Math.max(0,Math.round((base+delta)*1000)/1000); const ns=(field==="start"?nv:d.start), ne=(field==="end"?nv:d.end); if(ne>ns) onSetTimes(d.i,ns,ne); }
   async function startAudio(){ const a=audioRef.current; if(!a){ setAMsg("Player non pronto."); return; } if(!a.src){ const url=await loadAudio(); if(!url) return; a.src=url; } setMontageMode(false); setSoloEnd(null); setBarOpen(true); a.play().then(()=>{ setAMsg(""); setAPlaying(true); }).catch(err=>{ setAMsg("Il browser non riesce a riprodurre l'audio: "+(err&&err.message||err)); }); }
