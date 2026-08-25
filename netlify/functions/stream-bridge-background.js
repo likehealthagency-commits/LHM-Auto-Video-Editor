@@ -53,6 +53,27 @@ async function r2Delete(key){ const r=await r2Req("DELETE",key,{},""); return r.
 async function r2PutJson(key,obj){ const r=await r2Req("PUT",key,{},Buffer.from(JSON.stringify(obj,null,2),"utf8")); if(!r.ok) throw new Error("R2 putjson "+r.status); return true; }
 async function r2GetJson(key){ const r=await r2Req("GET",key,{},""); if(r.status===404) return null; if(!r.ok) throw new Error("R2 getjson "+r.status); return r.json(); }
 
+// PUT in streaming: il corpo scorre (stream), la firma usa UNSIGNED-PAYLOAD + Content-Length noto
+async function r2PutStream(key, bodyStream, contentLength){
+  const accessKey=process.env.R2_ACCESS_KEY_ID, secretKey=process.env.R2_SECRET_ACCESS_KEY;
+  const endpoint=process.env.R2_ENDPOINT, bucket=process.env.R2_BUCKET;
+  const host=endpoint.replace(/^https?:\/\//,"");
+  const region="auto", service="s3";
+  const amzDate=new Date().toISOString().replace(/[:-]|\.\d{3}/g,"");
+  const dateStamp=amzDate.slice(0,8);
+  const canonicalUri="/"+bucket+"/"+key.split("/").map(rfc3986).join("/");
+  const payloadHash="UNSIGNED-PAYLOAD";
+  const canonicalHeaders="host:"+host+"\n"+"x-amz-content-sha256:"+payloadHash+"\n"+"x-amz-date:"+amzDate+"\n";
+  const signedHeaders="host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest=["PUT",canonicalUri,"",canonicalHeaders,signedHeaders,payloadHash].join("\n");
+  const scope=dateStamp+"/"+region+"/"+service+"/aws4_request";
+  const stringToSign=["AWS4-HMAC-SHA256",amzDate,scope,sha256hex(canonicalRequest)].join("\n");
+  const kSigning=hmac(hmac(hmac(hmac("AWS4"+secretKey,dateStamp),region),service),"aws4_request");
+  const signature=crypto.createHmac("sha256",kSigning).update(stringToSign,"utf8").digest("hex");
+  const headers={ "Authorization":"AWS4-HMAC-SHA256 Credential="+accessKey+"/"+scope+", SignedHeaders="+signedHeaders+", Signature="+signature, "x-amz-date":amzDate, "x-amz-content-sha256":payloadHash, "Content-Length":String(contentLength), "Content-Type":"video/mp4" };
+  return fetch(endpoint+canonicalUri,{ method:"PUT", headers, body: bodyStream, duplex:"half" });
+}
+
 function r2PresignGet(key, expires){
   const accessKey=process.env.R2_ACCESS_KEY_ID, secretKey=process.env.R2_SECRET_ACCESS_KEY;
   const endpoint=process.env.R2_ENDPOINT, bucket=process.env.R2_BUCKET;
@@ -97,76 +118,70 @@ async function bridge(driveFileId){
   catch(e){ try{ await r2PutJson(mapKey, { error: String((e&&e.message)||e).slice(0,200), at: Date.now() }); }catch(_){}; throw e; }
 }
 
+async function getSize(token, driveFileId){
+  const q=new URLSearchParams({ fields:"size,name", supportsAllDrives:"true" });
+  const r=await fetch("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(driveFileId)+"?"+q.toString(),{ headers:{ Authorization:"Bearer "+token } });
+  if(!r.ok) return 0;
+  const j=await r.json().catch(()=>({}));
+  return j.size ? parseInt(j.size,10) : 0;
+}
+
+// VELOCE (come Palinsesto): scarica l'intero file in un colpo, poi UN solo PUT su R2
+async function simpleUpload(driveUrl, token, srcKey, t0){
+  const dl=await fetch(driveUrl,{ headers:{ Authorization:"Bearer "+token } });
+  if(!dl.ok) throw new Error("Drive download "+dl.status);
+  const b=Buffer.from(await dl.arrayBuffer());
+  console.log("Drive: scaricati "+Math.round(b.length/1048576)+" MB in "+Math.round((Date.now()-t0)/1000)+"s. Carico su R2...");
+  const pr=await r2Req("PUT", srcKey, {}, b);
+  if(!pr.ok) throw new Error("R2 put "+pr.status+" "+(await pr.text()).slice(0,120));
+}
+
+// GRANDE: il file scorre da Drive direttamente in R2 (streaming, memoria bassa) - metodo Palinsesto
+async function streamUpload(driveUrl, token, srcKey, size, t0){
+  const dl=await fetch(driveUrl,{ headers:{ Authorization:"Bearer "+token } });
+  if(!dl.ok || !dl.body) throw new Error("Drive download "+dl.status);
+  console.log("Streaming Drive->R2 senza caricare in memoria ("+Math.round(size/1048576)+" MB)...");
+  const r=await r2PutStream(srcKey, dl.body, size);
+  if(!r.ok) throw new Error("R2 put stream "+r.status+" "+(await r.text()).slice(0,120));
+}
 async function doBridge(driveFileId){
+  const t0=Date.now();
   const srcKey="sources/"+driveFileId+".mp4";
   const sa=JSON.parse(process.env.GOOGLE_SA_JSON);
   const token=await getSaToken(sa, "https://www.googleapis.com/auth/drive");
+  const driveUrl="https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(driveFileId)+"?alt=media&supportsAllDrives=true";
 
-  console.log("Scarico da Drive e carico su R2 a pezzi...");
-  const dl=await fetch("https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(driveFileId)+"?alt=media&supportsAllDrives=true",{ headers:{ "Authorization":"Bearer "+token } });
-  if(!dl.ok || !dl.body) throw new Error("Drive download "+dl.status);
-  console.log("Drive: download avviato (status "+dl.status+")");
+  const size=await getSize(token, driveFileId);
+  const SMALL=120*1024*1024;
+  console.log("Video "+(size?Math.round(size/1048576)+" MB":"dimensione sconosciuta")+": scarico da Drive...");
 
-  // multipart: init
-  const initRes=await r2Req("POST", srcKey, {uploads:""}, "");
-  const initXml=await initRes.text();
-  if(!initRes.ok) throw new Error("R2 init "+initRes.status+" "+initXml.slice(0,140));
-  const uploadId=(initXml.match(/<UploadId>([^<]+)<\/UploadId>/)||[])[1];
-  if(!uploadId) throw new Error("R2 uploadId mancante");
-  console.log("R2: multipart avviato");
-
-  const PART=32*1024*1024; // 32 MB per pezzo (uguali tranne l'ultimo, come richiede R2)
-  const parts=[]; let partNum=0; let buf=Buffer.alloc(0);
-  try{
-    const reader=dl.body.getReader();
-    async function put(chunk){
-      partNum++;
-      const pr=await r2Req("PUT", srcKey, {partNumber:String(partNum), uploadId}, Buffer.from(chunk));
-      if(!pr.ok) throw new Error("R2 part "+partNum+" "+pr.status+" "+(await pr.text()).slice(0,120));
-      const etag=pr.headers.get("etag");
-      parts.push({ n:partNum, etag });
-      console.log("R2: pezzo "+partNum+" caricato ("+Math.round((partNum*32))+" MB circa)");
-    }
-    let downloaded=0, lastLog=0;
-    while(true){
-      const { done, value } = await reader.read();
-      if(done) break;
-      downloaded += value.length;
-      if(downloaded - lastLog >= PART){ lastLog=downloaded; console.log("Drive: scaricati ~"+Math.round(downloaded/1048576)+" MB"); }
-      buf = buf.length ? Buffer.concat([buf, Buffer.from(value)]) : Buffer.from(value);
-      while(buf.length >= PART){ await put(buf.subarray(0,PART)); buf = buf.subarray(PART); }
-    }
-    if(buf.length > 0) await put(buf); // ultimo pezzo (piu' piccolo, ammesso)
-
-    const xml="<CompleteMultipartUpload>"+parts.map(p=>"<Part><PartNumber>"+p.n+"</PartNumber><ETag>"+p.etag+"</ETag></Part>").join("")+"</CompleteMultipartUpload>";
-    const cr=await r2Req("POST", srcKey, {uploadId}, Buffer.from(xml,"utf8"));
-    const ctext=await cr.text();
-    if(!cr.ok) throw new Error("R2 complete "+cr.status+" "+ctext.slice(0,140));
-    console.log("Copia su R2 completata ("+parts.length+" pezzi).");
-  }catch(e){
-    try{ await r2Req("DELETE", srcKey, {uploadId}, ""); }catch(_){}  // annulla il multipart
-    throw e;
+  if(size>0 && size<=SMALL){
+    await simpleUpload(driveUrl, token, srcKey, t0);
+    console.log("Copia su R2 completata in "+Math.round((Date.now()-t0)/1000)+"s.");
+  } else if(size>0){
+    await streamUpload(driveUrl, token, srcKey, size, t0);
+    console.log("Copia su R2 completata in "+Math.round((Date.now()-t0)/1000)+"s (streaming).");
+  } else {
+    await simpleUpload(driveUrl, token, srcKey, t0);
+    console.log("Copia su R2 completata in "+Math.round((Date.now()-t0)/1000)+"s.");
   }
 
-  // dai a Stream il link firmato di R2
   const url=r2PresignGet(srcKey, 7200);
-  console.log("Dico a Stream di scaricare da R2...");
+  console.log("Dico a Stream di scaricare da R2... (trasferimento finito in "+Math.round((Date.now()-t0)/1000)+"s)");
   const uid=await streamCopyFromUrl(url, driveFileId);
   await r2PutJson("stream/"+driveFileId+".json", { uid, createdAt:new Date().toISOString() });
   console.log("Stream uid: "+uid);
 
-  // aspetta che Stream abbia scaricato, poi CANCELLA la copia temporanea
   for(let i=0;i<90;i++){
     await sleep(8000);
     let v; try{ v=await streamGet(uid); }catch(_){ continue; }
     const state=(v.status&&v.status.state)||"";
     if(v.readyToStream || state==="inprogress" || state==="ready" || state==="error"){
       await r2Delete(srcKey);
-      console.log("Copia temporanea R2 cancellata (stato Stream: "+state+").");
+      console.log("Copia temporanea R2 cancellata (stato Stream: "+state+", totale "+Math.round((Date.now()-t0)/1000)+"s).");
       return;
     }
   }
-  // se ci ha messo troppo, cancella comunque per non lasciare residui
   await r2Delete(srcKey);
   console.log("Copia temporanea R2 cancellata (timeout attesa).");
 }
