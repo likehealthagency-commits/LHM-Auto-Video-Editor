@@ -155,8 +155,10 @@ exports.handler = async (event) => {
       doneDur+=(iv.end-iv.start);
       await heartbeat();
     }
-    // estraggo piu' spezzoni in parallelo (3 alla volta) per sfruttare i tempi morti di scarico
-    await mapLimit(edl.map((_,i)=>i), 3, extractOne);
+    // quanti spezzoni in parallelo: dipende dalla risoluzione (il 4K originale e' pesante in memoria)
+    const conc = (q.t===0) ? 1 : (q.t>=1080 ? 2 : 3);
+    console.log("Estrazione con "+conc+" spezzoni in parallelo.");
+    await mapLimit(edl.map((_,i)=>i), conc, extractOne);
     if(aborted){
       try{ await r2Send("DELETE","export-cancel/"+driveFileId+".json",null); }catch(_){}
       segFiles.forEach(f=>{ if(f){ try{fs.unlinkSync(f);}catch(_){} } }); segFiles=[];
