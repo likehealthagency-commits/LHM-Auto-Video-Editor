@@ -73,10 +73,14 @@ function r2PresignGet(key, expires){
   return endpoint+canonicalUri+"?"+cq+"&X-Amz-Signature="+signature;
 }
 
-function runFFmpeg(args){
+function runFFmpeg(args, onProgress){
   return new Promise((res,rej)=>{
     const ff=spawn(ffmpegPath,args);
-    let err=""; ff.stderr.on("data",d=>{ err+=d.toString(); if(err.length>6000) err=err.slice(-6000); });
+    let err="";
+    ff.stderr.on("data",d=>{
+      const t=d.toString(); err+=t; if(err.length>6000) err=err.slice(-6000);
+      if(onProgress){ const m=t.match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/); if(m){ onProgress((+m[1])*3600+(+m[2])*60+parseFloat(m[3])); } }
+    });
     ff.on("error",rej);
     ff.on("close",c=> c===0 ? res() : rej(new Error("ffmpeg "+c+": "+err.slice(-400))));
   });
@@ -127,10 +131,17 @@ exports.handler = async (event) => {
     fs.writeFileSync(filterFile, filter);
 
     console.log("Esporto "+edl.length+" spezzoni (qualita' "+(body.quality||"1080")+", formato "+(body.format||"original")+", crf "+q.crf+")...");
+    const totalDur = edl.reduce((a,iv)=>a+(iv.end-iv.start),0) || 1;
+    let lastProg=0;
     await runFFmpeg(["-y","-headers","Authorization: Bearer "+token+"\r\n","-i",driveUrl,
       "-filter_complex_script",filterFile,"-map",vmap,"-map","[outa]",
-      "-c:v","libx264","-preset","veryfast","-crf",String(q.crf),"-pix_fmt","yuv420p",
-      "-c:a","aac","-b:a","128k","-movflags","+faststart", out]);
+      "-c:v","libx264","-preset","superfast","-crf",String(q.crf),"-pix_fmt","yuv420p",
+      "-c:a","aac","-b:a","128k","-movflags","+faststart", out],
+      async (sec)=>{
+        const pct=Math.max(1, Math.min(99, Math.round(sec/totalDur*100)));
+        const now=Date.now();
+        if(now-lastProg>2500){ lastProg=now; try{ await r2PutJson("esportazioni/"+driveFileId+".json", { done:false, progress:pct, at:new Date().toISOString() }); }catch(_){} }
+      });
 
     const buf=fs.readFileSync(out);
     await r2Put("exports/"+driveFileId+".mp4", buf, "video/mp4");
