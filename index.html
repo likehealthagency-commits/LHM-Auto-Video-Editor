@@ -386,7 +386,7 @@ function Analysis({data,onToggle,toggling,onApprove,onResilence,resilencing,onSt
   );
 }
 
-function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,onStartSplit,onDoSplit,onCancelSplit,onUndo,onRedo,onSetTimes,live}){
+function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,onApprove,onResilence,onStartSplit,onDoSplit,onCancelSplit,onUndo,onRedo,onSetTimes,onEnhance,onListen,live}){
   const status=live.status||raw.status||"queued";
   return (
     <div className="take">
@@ -400,11 +400,14 @@ function Take({raw,index,total,onMove,onDelete,onTranscribe,onAnalyze,onToggle,o
       </div>
       <div className="actions">
         <Chip status={status} />
+        {status!=="working" && <button className="btn sm" onClick={()=>onEnhance(raw)} disabled={live.enhancing}>{live.enhancing?<span className="spin"></span>:"Migliora audio"}</button>}
         {status!=="working" && <button className="btn sm pri" onClick={()=>onTranscribe(raw)}>{status==="ready"?"Ritrascrivi":"Trascrivi"}</button>}
         {status==="ready" && <button className="btn sm" onClick={()=>live.onView(raw)}>Vedi trascrizione</button>}
         {status==="ready" && <button className="btn sm" onClick={()=>onAnalyze(raw)} disabled={live.analyzing}>{live.analyzing?<span className="spin"></span>:(live.analysis?"Rigenera da capo":"Trova i tagli")}</button>}
         <button className="btn sm ghost danger" onClick={()=>onDelete(raw)}>Rimuovi</button>
       </div>
+      {live.enhMsg && <div style={{marginTop:8,fontSize:13,color:"var(--muted)",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}><span>{live.enhMsg}</span>{live.audioReady && <button className="btn sm" onClick={()=>onListen(raw)}>Ascolta audio</button>}</div>}
+      {live.listenUrl && <audio controls src={live.listenUrl} style={{marginTop:8,width:"100%",maxWidth:440}}></audio>}
       {status==="working" && <Progress startedAt={live.startedAt||Date.now()} />}
       {live.tx && (<div className="tx"><p>{live.tx.text}</p><div className="stat mono">{(live.tx.words||[]).length} parole · {(live.tx.segments||[]).length} segmenti · {Math.round(live.tx.duration||0)}s</div></div>)}
       {live.analyzing && !live.analysis && <div style={{marginTop:12,color:"var(--muted)",fontSize:13}}><span className="spin"></span> Il cervello sta leggendo la trascrizione…</div>}
@@ -450,9 +453,21 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
     try{ const d=await api("addRaw",{projectId,link:link.trim()}); setProject(d.project); setLink("");}catch(e){setErr(e.message);} setBusy(false); }
   async function move(raw,dir){ try{ const d=await api("reorderRaw",{projectId,rawId:raw.id,direction:dir}); setProject(d.project);}catch(e){setErr(e.message);} }
   async function delRaw(raw){ if(!confirm("Rimuovere questo grezzo dal progetto?"))return; try{ const d=await api("deleteRaw",{projectId,rawId:raw.id}); setProject(d.project);}catch(e){setErr(e.message);} }
+  async function enhanceAudio(raw){
+    setLive(L=>({...L,[raw.id]:{...(L[raw.id]||{}),enhancing:true,enhMsg:"Miglioro l’audio… puo’ richiedere un po’.",listenUrl:null}}));
+    try{
+      await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId,audioOnly:true,enhance:audioMode})});
+      let done=null;
+      for(let i=0;i<150 && !done;i++){ await new Promise(r=>setTimeout(r,3000)); try{ const d=await api("audioStatus",{driveFileId:raw.driveFileId}); if(d.status && d.status.done) done=d.status; }catch(_){} }
+      if(done && done.error) setLive(L=>({...L,[raw.id]:{...L[raw.id],enhancing:false,enhMsg:"Errore: "+done.error}}));
+      else if(done) setLive(L=>({...L,[raw.id]:{...L[raw.id],enhancing:false,enhMsg:"Audio pronto ("+(done.mode||"")+"). Ascoltalo, poi trascrivi.",audioReady:true}}));
+      else setLive(L=>({...L,[raw.id]:{...L[raw.id],enhancing:false,enhMsg:"Sta impiegando piu’ del previsto: riprova a controllare."}}));
+    }catch(e){ setLive(L=>({...L,[raw.id]:{...L[raw.id],enhancing:false,enhMsg:"Errore: "+e.message}})); }
+  }
+  async function listenAudio(raw){ try{ const d=await api("audioUrl",{driveFileId:raw.driveFileId}); if(d.url) setLive(L=>({...L,[raw.id]:{...L[raw.id],listenUrl:d.url}})); else setErr("Audio non disponibile: premi prima “Migliora audio”."); }catch(e){ setErr(e.message); } }
   async function transcribe(raw){
     setLive(L=>({...L,[raw.id]:{...(L[raw.id]||{}),status:"working",startedAt:Date.now(),tx:null,error:null,analysis:null}}));
-    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId,enhance:audioMode})}); }
+    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId})}); }
     catch(e){ setLive(L=>({...L,[raw.id]:{...L[raw.id],status:"error",error:"Avvio non riuscito: "+e.message}})); }
   }
   async function viewTx(raw){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); setLive(L=>({...L,[raw.id]:{...L[raw.id],tx:d.transcript}}));}catch(e){ setErr(e.message);} }
@@ -516,14 +531,14 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
         <button className="btn pri" onClick={addRaw} disabled={busy||!link.trim()}>{busy?<span className="spin"></span>:"Aggiungi"}</button>
       </div>
       <div className="enhrow">
-        <span>Pulizia audio in trascrizione:</span>
+        <span>Tipo di miglioramento audio:</span>
         {[["Nessuna","none"],["Base (gratis)","base"],["Potente (a pagamento)","power"]].map(o=>(
           <button key={o[1]} className={"btn sm"+(audioMode===o[1]?" pri":"")} onClick={()=>setAudioMode(o[1])}>{o[0]}</button>
         ))}
       </div>
       {raws.length===0
         ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
-        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} onUndo={undoEdit} onRedo={redoEdit} onSetTimes={setTimes} live={liveFor(r)} />)}</div>}
+        : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} onUndo={undoEdit} onRedo={redoEdit} onSetTimes={setTimes} onEnhance={enhanceAudio} onListen={listenAudio} live={liveFor(r)} />)}</div>}
     </div>
   );
 }
