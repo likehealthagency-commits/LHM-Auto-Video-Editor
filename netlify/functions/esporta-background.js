@@ -73,6 +73,11 @@ function r2PresignGet(key, expires){
   return endpoint+canonicalUri+"?"+cq+"&X-Amz-Signature="+signature;
 }
 
+async function mapLimit(items, limit, fn){
+  let i=0;
+  async function worker(){ while(i<items.length){ const idx=i++; await fn(items[idx]); } }
+  await Promise.all(Array.from({length:Math.min(limit, items.length)}, ()=>worker()));
+}
 function runFFmpeg(args, onProgress){
   return new Promise((res,rej)=>{
     const ff=spawn(ffmpegPath,args);
@@ -132,34 +137,32 @@ exports.handler = async (event) => {
 
     console.log("Esporto "+edl.length+" spezzoni A SALTI (qualita' "+(body.quality||"1080")+", formato "+(body.format||"original")+", crf "+q.crf+")...");
     const totalDur = edl.reduce((acc,iv)=>acc+(iv.end-iv.start),0) || 1;
-    let doneDur=0, lastBeat=0;
+    let doneDur=0, lastBeat=0, aborted=false;
     const stamp=Date.now();
-    // estraggo ogni spezzone SALTANDO direttamente al suo punto: legge da Drive solo quel pezzo, non tutto il file
-    // rimuovo un eventuale vecchio segnale di annullamento prima di iniziare
     try{ await r2Send("DELETE","export-cancel/"+driveFileId+".json",null); }catch(_){}
-    for(let i=0;i<edl.length;i++){
-      // l'utente ha chiesto di annullare?
-      let cancelReq=null; try{ cancelReq=await r2GetJson("export-cancel/"+driveFileId+".json"); }catch(_){}
-      if(cancelReq){
-        try{ await r2Send("DELETE","export-cancel/"+driveFileId+".json",null); }catch(_){}
-        segFiles.forEach(f=>{ try{fs.unlinkSync(f);}catch(_){} }); segFiles=[];
-        await r2PutJson("esportazioni/"+driveFileId+".json", { done:true, cancelled:true, at:new Date().toISOString() });
-        console.log("Export annullato dall'utente.");
-        return {statusCode:200};
-      }
+    segFiles=new Array(edl.length);
+    async function heartbeat(){ const now=Date.now(); if(now-lastBeat>4000){ lastBeat=now; const pct=Math.max(1,Math.min(98,Math.round(doneDur/totalDur*100))); try{ await r2PutJson("esportazioni/"+driveFileId+".json",{ done:false, progress:pct, at:new Date().toISOString() }); }catch(_){} } }
+    async function checkCancel(){ if(aborted) return true; let c=null; try{ c=await r2GetJson("export-cancel/"+driveFileId+".json"); }catch(_){} if(c){ aborted=true; } return aborted; }
+    async function extractOne(i){
+      if(await checkCancel()) return;
       const iv=edl[i];
       const seg="/tmp/seg_"+stamp+"_"+i+".ts";
       const args=["-y","-ss",String(iv.start),"-headers","Authorization: Bearer "+token+"\r\n","-i",driveUrl,"-t",String(iv.end-iv.start)];
       if(vf) args.push("-vf",vf);
       args.push("-c:v","libx264","-preset","superfast","-crf",String(q.crf),"-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-f","mpegts",seg);
-      await runFFmpeg(args, async (sec)=>{
-        const now=Date.now();
-        if(now-lastBeat>4000){ lastBeat=now; const pct=Math.max(1,Math.min(98,Math.round((doneDur+sec)/totalDur*100))); try{ await r2PutJson("esportazioni/"+driveFileId+".json",{ done:false, progress:pct, at:new Date().toISOString() }); }catch(_){} }
-      });
-      segFiles.push(seg);
+      await runFFmpeg(args, heartbeat);
+      segFiles[i]=seg;
       doneDur+=(iv.end-iv.start);
-      const pct=Math.max(1, Math.min(98, Math.round(doneDur/totalDur*100)));
-      try{ await r2PutJson("esportazioni/"+driveFileId+".json", { done:false, progress:pct, at:new Date().toISOString() }); }catch(_){}
+      await heartbeat();
+    }
+    // estraggo piu' spezzoni in parallelo (3 alla volta) per sfruttare i tempi morti di scarico
+    await mapLimit(edl.map((_,i)=>i), 3, extractOne);
+    if(aborted){
+      try{ await r2Send("DELETE","export-cancel/"+driveFileId+".json",null); }catch(_){}
+      segFiles.forEach(f=>{ if(f){ try{fs.unlinkSync(f);}catch(_){} } }); segFiles=[];
+      await r2PutJson("esportazioni/"+driveFileId+".json", { done:true, cancelled:true, at:new Date().toISOString() });
+      console.log("Export annullato dall'utente.");
+      return {statusCode:200};
     }
 
     // ricucio gli spezzoni senza ri-codificare (concatenazione veloce)
