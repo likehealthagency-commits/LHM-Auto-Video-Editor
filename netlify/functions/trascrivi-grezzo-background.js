@@ -371,10 +371,52 @@ async function putToR2(objectKey, bodyString){
   return objectKey;
 }
 
+// SOLO MIGLIORAMENTO AUDIO (separato dalla trascrizione): estrae, pulisce e salva l'audio su R2
+async function handleAudioOnly(driveFileId, mode){
+  const aud="/tmp/prep_"+Date.now()+".mp3";
+  let playerAudio=null;
+  try{
+    await putToR2("audio-status/"+driveFileId+".json", JSON.stringify({ done:false, mode, at:new Date().toISOString() }));
+    const sa=JSON.parse(process.env.GOOGLE_SA_JSON);
+    const token=await getSaToken(sa, SCOPE);
+    if(mode==="power"){
+      const audHi="/tmp/hi_"+Date.now()+".mp3";
+      console.log("Miglioramento POTENTE: estraggo l'audio ad alta qualita'...");
+      await extractAudio(token, driveFileId, audHi, { rate:44100, bitrate:"128k", enhance:false });
+      const audClean="/tmp/clean_"+Date.now()+".mp3";
+      console.log("Invio a ElevenLabs per isolare la voce...");
+      await elevenLabsIsolate(audHi, audClean);
+      try{ fs.unlinkSync(audHi); }catch(_){}
+      playerAudio=audClean;
+    } else {
+      console.log(mode==="base" ? "Miglioramento BASE (FFmpeg)..." : "Estraggo l'audio senza pulizia...");
+      await extractAudio(token, driveFileId, aud, { rate:16000, bitrate:"64k", enhance:(mode==="base") });
+      playerAudio=aud;
+    }
+    await putBinaryToR2("audio/"+driveFileId+".mp3", fs.readFileSync(playerAudio), "audio/mpeg");
+    try{ fs.unlinkSync(aud); }catch(_){}
+    try{ if(playerAudio!==aud) fs.unlinkSync(playerAudio); }catch(_){}
+    await putToR2("audio-status/"+driveFileId+".json", JSON.stringify({ done:true, mode, at:new Date().toISOString() }));
+    console.log("Audio migliorato e salvato ("+mode+").");
+    return { statusCode:200 };
+  }catch(e){
+    try{ fs.unlinkSync(aud); }catch(_){}
+    const msg=String((e&&e.message)||e).slice(0,300);
+    console.log("MIGLIORA ERRORE:", msg);
+    try{ await putToR2("audio-status/"+driveFileId+".json", JSON.stringify({ done:true, error:msg, at:new Date().toISOString() })); }catch(_){}
+    return { statusCode:500 };
+  }
+}
+
 exports.handler = async (event) => {
   let body; try { body = JSON.parse(event.body || "{}"); } catch(_){ return { statusCode:400 }; }
   const driveFileId = body.driveFileId;
   if(!driveFileId) return { statusCode:400 };
+
+  if(body.audioOnly){
+    let mode=body.enhance; if(mode===true||mode==null) mode="base"; else if(mode===false) mode="none";
+    return await handleAudioOnly(driveFileId, mode);
+  }
 
   if(body.forceRange && body.forceRange.start!=null && body.forceRange.end!=null){
     return await handleForceRange(driveFileId, +body.forceRange.start, +body.forceRange.end);
@@ -392,23 +434,18 @@ exports.handler = async (event) => {
     if(!String(meta.mimeType||"").startsWith("video/")) throw new Error("Il file non e' un video (" + meta.mimeType + ").");
 
     console.log("Estraggo l'audio da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
-    let mode = body.enhance;
-    if(mode===true || mode===undefined || mode===null) mode="base";
-    else if(mode===false) mode="none";
-    if(mode==="power"){
-      const audHi="/tmp/hi_"+Date.now()+".mp3";
-      console.log("Pulizia POTENTE: estraggo l'audio ad alta qualita'...");
-      await extractAudio(token, driveFileId, audHi, { rate:44100, bitrate:"128k", enhance:false });
-      const audClean="/tmp/clean_"+Date.now()+".mp3";
-      console.log("Invio a ElevenLabs per isolare la voce...");
-      await elevenLabsIsolate(audHi, audClean);
-      try{ fs.unlinkSync(audHi); }catch(_){}
-      await ffmpegConvert(audClean, aud, 16000);
-      playerAudio = audClean; // per l'ascolto salvo la versione pulita ad alta qualita'
+    // usa l'audio gia' preparato/migliorato se presente, altrimenti estrai il grezzo
+    const prepared = await getBytesFromR2("audio/"+driveFileId+".mp3");
+    if(prepared && prepared.length>2000){
+      const tmpIn="/tmp/prepin_"+Date.now()+".mp3"; fs.writeFileSync(tmpIn, prepared);
+      await ffmpegConvert(tmpIn, aud, 16000);
+      try{ fs.unlinkSync(tmpIn); }catch(_){}
+      playerAudio=null; // gia' su R2, non risalvare
+      console.log("Uso l'audio gia' preparato.");
     } else {
-      console.log(mode==="base" ? "Estraggo e pulisco l'audio (base)..." : "Estraggo l'audio (senza pulizia)...");
-      await extractAudio(token, driveFileId, aud, { rate:16000, bitrate:"64k", enhance:(mode==="base") });
-      playerAudio = aud;
+      console.log("Nessun audio preparato: estraggo il grezzo dal video.");
+      await extractAudio(token, driveFileId, aud, { rate:16000, bitrate:"64k", enhance:false });
+      playerAudio=aud;
     }
 
     let sizeMB = 0; try { sizeMB = fs.statSync(aud).size / 1048576; } catch(_){ sizeMB = 0; }
@@ -445,7 +482,7 @@ exports.handler = async (event) => {
       console.log("Copertura: parlato senza testo " + r.holesBefore.toFixed(1) + "s -> residuo " + r.holesAfter.toFixed(1) + "s (recuperati " + recovered + " pezzi)");
     } catch(e){ console.log("Completamento saltato:", String((e&&e.message)||e).slice(0,120)); }
 
-    try { await putBinaryToR2("audio/"+driveFileId+".mp3", fs.readFileSync(playerAudio||aud), "audio/mpeg"); console.log("Audio salvato su R2 per l'ascolto."); } catch(e){ console.log("Salvataggio audio saltato:", String((e&&e.message)||e).slice(0,80)); }
+    try { if(playerAudio){ await putBinaryToR2("audio/"+driveFileId+".mp3", fs.readFileSync(playerAudio), "audio/mpeg"); console.log("Audio salvato su R2 per l'ascolto."); } } catch(e){ console.log("Salvataggio audio saltato:", String((e&&e.message)||e).slice(0,80)); }
     try { fs.unlinkSync(aud); } catch(_){}
     try { if(playerAudio && playerAudio!==aud) fs.unlinkSync(playerAudio); } catch(_){}
 

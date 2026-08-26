@@ -115,6 +115,7 @@ async function actProxyUrl(p){
   if(!(await r2Exists("proxies/"+p.driveFileId+".mp4"))) throw new Error("Anteprima non ancora pronta.");
   return { url: r2PresignGet("proxies/"+p.driveFileId+".mp4", 21600) };
 }
+async function actAudioStatus(p){ return { status: (await r2GetJson("audio-status/"+p.driveFileId+".json")) || null }; }
 async function actAudioUrl(p){
   if(!(await r2Exists("audio/"+p.driveFileId+".mp3"))) return { url:null };
   return { url: r2PresignGet("audio/"+p.driveFileId+".mp3", 7200) };
@@ -230,6 +231,7 @@ async function actDeleteProject(p){
       try{ await r2Delete("sources/"+r.driveFileId+".mp4"); }catch(_){}
       try{ await r2Delete("sources/"+r.driveFileId+".lock"); }catch(_){}
       try{ await r2Delete("audio/"+r.driveFileId+".mp3"); }catch(_){}
+      try{ await r2Delete("audio-status/"+r.driveFileId+".json"); }catch(_){}
       try{ await r2Delete("forced/"+r.driveFileId+".json"); }catch(_){}
       try{ await r2Delete("exports/"+r.driveFileId+".mp4"); }catch(_){}
       try{ await r2Delete("esportazioni/"+r.driveFileId+".json"); }catch(_){}
@@ -280,6 +282,7 @@ exports.handler = async (event) => {
       case "proxyStatus":   out = await actProxyStatus(p); break;
       case "proxyUrl":      out = await actProxyUrl(p); break;
       case "audioUrl":      out = await actAudioUrl(p); break;
+      case "audioStatus":   out = await actAudioStatus(p); break;
       case "forceStatus":   out = await actForceStatus(p); break;
       case "exportStatus":  out = await actExportStatus(p); break;
       default: return { statusCode:400, body: JSON.stringify({error:"Azione sconosciuta: "+p.action}) };
