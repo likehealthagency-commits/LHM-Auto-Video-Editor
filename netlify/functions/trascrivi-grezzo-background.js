@@ -36,17 +36,38 @@ async function getFileMeta(token, fileId){
   if(!res.ok) throw new Error("Drive meta " + res.status + " " + (await res.text()).slice(0,140));
   return res.json();
 }
-function extractAudioFromDriveUrl(token, driveFileId, outAudioPath, enhance){
+function extractAudio(token, driveFileId, outAudioPath, opts){
+  opts = opts || {};
   return new Promise((resolve, reject) => {
     const url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(driveFileId) + "?alt=media&supportsAllDrives=true";
     const args = [ "-y", "-headers", "Authorization: Bearer " + token + "\r\n", "-i", url, "-vn" ];
-    if(enhance){ args.push("-af", "highpass=f=80,afftdn=nr=6,dynaudnorm=f=250:g=15:m=3"); }
-    args.push("-ac", "1", "-ar", "16000", "-b:a", "64k", outAudioPath);
+    if(opts.enhance){ args.push("-af", "highpass=f=80,afftdn=nr=6,dynaudnorm=f=250:g=15:m=3"); }
+    args.push("-ac", "1", "-ar", String(opts.rate||16000), "-b:a", String(opts.bitrate||"64k"), outAudioPath);
     const ff = spawn(ffmpegPath, args);
     let err = ""; ff.stderr.on("data", (d)=>{ err += d.toString(); });
     ff.on("error", reject);
     ff.on("close", (code)=> code === 0 ? resolve() : reject(new Error("ffmpeg " + code + ": " + err.slice(-300))));
   });
+}
+// converte un file audio locale in mono 16k (per Whisper) senza toccare i tempi
+function ffmpegConvert(input, output, rate){
+  return new Promise((resolve, reject) => {
+    const ff = spawn(ffmpegPath, ["-y","-i",input,"-vn","-ac","1","-ar",String(rate||16000),"-b:a","64k",output]);
+    let err=""; ff.stderr.on("data",d=>{ err+=d.toString(); });
+    ff.on("error", reject);
+    ff.on("close", c=> c===0 ? resolve() : reject(new Error("ffmpeg convert "+c+": "+err.slice(-200))));
+  });
+}
+// pulizia POTENTE: isola la voce con l'AI di ElevenLabs
+async function elevenLabsIsolate(inputPath, outputPath){
+  const key=process.env.ELEVENLABS_API_KEY;
+  if(!key) throw new Error("Manca la chiave ELEVENLABS_API_KEY nelle variabili Netlify.");
+  const buf=fs.readFileSync(inputPath);
+  const form=new FormData();
+  form.append("audio", new Blob([buf],{type:"audio/mpeg"}), "audio.mp3");
+  const res=await fetch("https://api.elevenlabs.io/v1/audio-isolation",{ method:"POST", headers:{ "xi-api-key":key }, body:form });
+  if(!res.ok){ const t=await res.text().catch(()=>""); throw new Error("ElevenLabs "+res.status+" "+t.slice(0,150)); }
+  fs.writeFileSync(outputPath, Buffer.from(await res.arrayBuffer()));
 }
 async function whisperVerbose(audioPath){
   const key = process.env.OPENAI_API_KEY;
@@ -143,7 +164,7 @@ function extractSlice(audioPath, start, dur, outPath){
 async function transcribeHole(audioPath, g, duration){
   const pad=0.3, start=Math.max(0,g.start-pad), dur=Math.min(duration-start,(g.end+pad)-start);
   if(dur<0.4) return null;
-  const slice="/tmp/gap_"+Date.now()+"_"+Math.round(start*1000)+".mp3";
+  const slice="/tmp/gap_"+Date.now()+"_"+Math.round(start*1000)+"_"+Math.floor(Math.random()*1e6)+".mp3";
   try{
     await extractSlice(audioPath,start,dur,slice);
     const v=await whisperVerbose(slice);
@@ -157,6 +178,14 @@ async function transcribeHole(audioPath, g, duration){
   }catch(_){ try{ fs.unlinkSync(slice); }catch(__){} return null; }
 }
 
+// esegue fn su tutti gli item con al massimo "limit" in parallelo
+async function mapLimit(items, limit, fn){
+  const out=new Array(items.length); let i=0;
+  async function worker(){ while(i<items.length){ const idx=i++; out[idx]=await fn(items[idx], idx); } }
+  await Promise.all(Array.from({length:Math.min(limit, items.length)}, ()=>worker()));
+  return out;
+}
+
 // riempie TUTTI i buchi di copertura (parlato senza testo), per avere la mappa COMPLETA
 async function fillTranscript(audioPath, duration, silences, words, segments){
   if(!duration || duration<=0) return { words, segments, recovered:0, holesBefore:0, holesAfter:0, holesList:[] };
@@ -168,10 +197,8 @@ async function fillTranscript(audioPath, duration, silences, words, segments){
     const holes = suspect(coverageHoles(allWords, duration, 0.35)).slice(0, 50);
     if(holes.length===0) break;
     let any=false;
-    for(const g of holes){
-      const r = await transcribeHole(audioPath, g, duration);
-      if(r){ allWords=allWords.concat(r.words); allSegs.push(r.seg); recovered++; any=true; }
-    }
+    const results = await mapLimit(holes, 5, function(g){ return transcribeHole(audioPath, g, duration); });
+    for(const r of results){ if(r){ allWords=allWords.concat(r.words); allSegs.push(r.seg); recovered++; any=true; } }
     if(!any) break;
   }
   const holesList = suspect(coverageHoles(allWords, duration, 0.35)).map(function(h){ return { start:+h.start.toFixed(2), end:+h.end.toFixed(2) }; });
@@ -212,38 +239,45 @@ function cleanTranscript(words, segments, duration){
 
 // IDEA 2: segmenti con POCO testo per TROPPO tempo (Whisper ha compresso/saltato).
 // Ri-trascriviamo isolato quel pezzo: da solo Whisper non comprime e tira fuori tutto.
+async function densifyOne(seg, words, audioPath, duration){
+  const pad=0.2, start=Math.max(0, seg.start-pad), dur=Math.min(duration-start, (seg.end+pad)-start);
+  if(dur<0.5) return null;
+  const slice="/tmp/dens_"+Date.now()+"_"+Math.round(start*1000)+"_"+Math.floor(Math.random()*1e6)+".mp3";
+  try{
+    await extractSlice(audioPath, start, dur, slice);
+    const v = await whisperVerbose(slice);
+    try{ fs.unlinkSync(slice); }catch(_){}
+    const nw=(Array.isArray(v.words)?v.words:[])
+      .map(function(w){ return { word:w.word, start:(w.start||0)+start, end:(w.end||0)+start }; })
+      .filter(function(w){ return w.start>=seg.start-0.1 && w.end<=seg.end+0.25; });
+    const oldCount = words.filter(function(w){ return w.start>=seg.start-0.05 && w.start<seg.end+0.05; }).length;
+    if(nw.length >= oldCount+2 && nw.length > oldCount*1.3){
+      const ns=(Array.isArray(v.segments)?v.segments:[])
+        .map(function(x){ return { start:(x.start||0)+start, end:(x.end||0)+start, text:(x.text||"").trim() }; })
+        .filter(function(x){ return x.start>=seg.start-0.2 && x.end<=seg.end+0.35 && x.text; });
+      return { seg, nw, ns };
+    }
+    return null;
+  }catch(_){ try{ fs.unlinkSync(slice); }catch(__){} return null; }
+}
+
 async function densifyTranscript(audioPath, duration, words, segments){
   if(!duration || duration<=0) return { words, segments, densified:0 };
-  let allWords = words.slice();
-  let newSegments = segments.slice();
-  let densified = 0;
   const candidates = segments.filter(function(s){
     const dur = s.end - s.start; if(dur < 3) return false;
     const wc = words.filter(function(w){ return w.start>=s.start-0.05 && w.start<s.end+0.05; }).length;
-    return (wc/dur) < 1.4; // meno di ~1,4 parole al secondo = sospetto
+    return (wc/dur) < 1.4;
   }).slice(0, 20);
-  for(const seg of candidates){
-    const pad=0.2, start=Math.max(0, seg.start-pad), dur=Math.min(duration-start, (seg.end+pad)-start);
-    if(dur<0.5) continue;
-    const slice="/tmp/dens_"+Date.now()+"_"+Math.round(start*1000)+".mp3";
-    try{
-      await extractSlice(audioPath, start, dur, slice);
-      const v = await whisperVerbose(slice);
-      try{ fs.unlinkSync(slice); }catch(_){}
-      const nw=(Array.isArray(v.words)?v.words:[])
-        .map(function(w){ return { word:w.word, start:(w.start||0)+start, end:(w.end||0)+start }; })
-        .filter(function(w){ return w.start>=seg.start-0.1 && w.end<=seg.end+0.25; });
-      const oldCount = allWords.filter(function(w){ return w.start>=seg.start-0.05 && w.start<seg.end+0.05; }).length;
-      // sostituisco SOLO se la versione isolata e' davvero piu' ricca (ha trovato roba nascosta)
-      if(nw.length >= oldCount+2 && nw.length > oldCount*1.3){
-        const ns=(Array.isArray(v.segments)?v.segments:[])
-          .map(function(x){ return { start:(x.start||0)+start, end:(x.end||0)+start, text:(x.text||"").trim() }; })
-          .filter(function(x){ return x.start>=seg.start-0.2 && x.end<=seg.end+0.35 && x.text; });
-        allWords = allWords.filter(function(w){ return !(w.start>=seg.start-0.05 && w.start<seg.end+0.05); }).concat(nw);
-        newSegments = newSegments.filter(function(x){ return x!==seg; }).concat(ns.length ? ns : [{ start:nw[0].start, end:nw[nw.length-1].end, text:nw.map(function(w){return w.word;}).join(" ") }]);
-        densified++;
-      }
-    }catch(_){ try{ fs.unlinkSync(slice); }catch(__){} }
+  const results = await mapLimit(candidates, 4, function(seg){ return densifyOne(seg, words, audioPath, duration); });
+  let allWords = words.slice();
+  let newSegments = segments.slice();
+  let densified = 0;
+  for(const r of results){
+    if(!r) continue;
+    const seg=r.seg;
+    allWords = allWords.filter(function(w){ return !(w.start>=seg.start-0.05 && w.start<seg.end+0.05); }).concat(r.nw);
+    newSegments = newSegments.filter(function(x){ return x!==seg; }).concat(r.ns.length ? r.ns : [{ start:r.nw[0].start, end:r.nw[r.nw.length-1].end, text:r.nw.map(function(w){return w.word;}).join(" ") }]);
+    densified++;
   }
   return { words: allWords, segments: newSegments, densified };
 }
@@ -347,6 +381,7 @@ exports.handler = async (event) => {
   }
 
   const aud = "/tmp/grezzo_" + Date.now() + ".mp3";
+  let playerAudio = null;
   let token;
   try {
     const sa = JSON.parse(process.env.GOOGLE_SA_JSON);
@@ -357,9 +392,24 @@ exports.handler = async (event) => {
     if(!String(meta.mimeType||"").startsWith("video/")) throw new Error("Il file non e' un video (" + meta.mimeType + ").");
 
     console.log("Estraggo l'audio da Drive (" + (meta.size ? Math.round(meta.size/1048576)+" MB" : "?") + ", " + (meta.mimeType||"?") + ")...");
-    const enhance = body.enhance !== false; // pulizia audio attiva salvo esplicito spegnimento
-    console.log(enhance ? "Estraggo e PULISCO l'audio (togli rumori + normalizzo)..." : "Estraggo l'audio (senza pulizia)...");
-    await extractAudioFromDriveUrl(token, driveFileId, aud, enhance);
+    let mode = body.enhance;
+    if(mode===true || mode===undefined || mode===null) mode="base";
+    else if(mode===false) mode="none";
+    if(mode==="power"){
+      const audHi="/tmp/hi_"+Date.now()+".mp3";
+      console.log("Pulizia POTENTE: estraggo l'audio ad alta qualita'...");
+      await extractAudio(token, driveFileId, audHi, { rate:44100, bitrate:"128k", enhance:false });
+      const audClean="/tmp/clean_"+Date.now()+".mp3";
+      console.log("Invio a ElevenLabs per isolare la voce...");
+      await elevenLabsIsolate(audHi, audClean);
+      try{ fs.unlinkSync(audHi); }catch(_){}
+      await ffmpegConvert(audClean, aud, 16000);
+      playerAudio = audClean; // per l'ascolto salvo la versione pulita ad alta qualita'
+    } else {
+      console.log(mode==="base" ? "Estraggo e pulisco l'audio (base)..." : "Estraggo l'audio (senza pulizia)...");
+      await extractAudio(token, driveFileId, aud, { rate:16000, bitrate:"64k", enhance:(mode==="base") });
+      playerAudio = aud;
+    }
 
     let sizeMB = 0; try { sizeMB = fs.statSync(aud).size / 1048576; } catch(_){ sizeMB = 0; }
     console.log("Audio " + sizeMB.toFixed(2) + " MB -> Whisper...");
@@ -395,8 +445,9 @@ exports.handler = async (event) => {
       console.log("Copertura: parlato senza testo " + r.holesBefore.toFixed(1) + "s -> residuo " + r.holesAfter.toFixed(1) + "s (recuperati " + recovered + " pezzi)");
     } catch(e){ console.log("Completamento saltato:", String((e&&e.message)||e).slice(0,120)); }
 
-    try { await putBinaryToR2("audio/"+driveFileId+".mp3", fs.readFileSync(aud), "audio/mpeg"); console.log("Audio salvato su R2 per l'ascolto."); } catch(e){ console.log("Salvataggio audio saltato:", String((e&&e.message)||e).slice(0,80)); }
+    try { await putBinaryToR2("audio/"+driveFileId+".mp3", fs.readFileSync(playerAudio||aud), "audio/mpeg"); console.log("Audio salvato su R2 per l'ascolto."); } catch(e){ console.log("Salvataggio audio saltato:", String((e&&e.message)||e).slice(0,80)); }
     try { fs.unlinkSync(aud); } catch(_){}
+    try { if(playerAudio && playerAudio!==aud) fs.unlinkSync(playerAudio); } catch(_){}
 
     // pulizia finale: niente sovrapposizioni, niente parole duplicate, tempi entro la durata
     const cleaned = cleanTranscript(words, segments, duration);
@@ -422,6 +473,7 @@ exports.handler = async (event) => {
     return { statusCode:200 };
   } catch(e){
     try { fs.unlinkSync(aud); } catch(_){}
+    try { if(playerAudio && playerAudio!==aud) fs.unlinkSync(playerAudio); } catch(_){}
     const msg = String((e && e.message) || e).slice(0, 300);
     console.log("ERRORE:", msg);
     try { await putToR2("errors/" + driveFileId + ".json", JSON.stringify({ error: msg, at: new Date().toISOString(), driveFileId }, null, 2)); } catch(_){}
