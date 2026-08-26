@@ -99,7 +99,7 @@ exports.handler = async (event) => {
     let existing=null; try{ existing=await r2GetJson("esportazioni/"+driveFileId+".json"); }catch(_){}
     if(existing && existing.done===false && existing.at){
       const age=Date.now()-new Date(existing.at).getTime();
-      if(age>=0 && age<16*60*1000){ console.log("Export gia' in corso (eta' "+Math.round(age/1000)+"s): salto questa esecuzione."); return {statusCode:200}; }
+      if(age>=0 && age<120*1000){ console.log("Export gia' in corso (eta' "+Math.round(age/1000)+"s): salto questa esecuzione."); return {statusCode:200}; }
     }
     await r2PutJson("esportazioni/"+driveFileId+".json", { done:false, progress:0, at:new Date().toISOString() });
 
@@ -132,16 +132,30 @@ exports.handler = async (event) => {
 
     console.log("Esporto "+edl.length+" spezzoni A SALTI (qualita' "+(body.quality||"1080")+", formato "+(body.format||"original")+", crf "+q.crf+")...");
     const totalDur = edl.reduce((acc,iv)=>acc+(iv.end-iv.start),0) || 1;
-    let doneDur=0;
+    let doneDur=0, lastBeat=0;
     const stamp=Date.now();
     // estraggo ogni spezzone SALTANDO direttamente al suo punto: legge da Drive solo quel pezzo, non tutto il file
+    // rimuovo un eventuale vecchio segnale di annullamento prima di iniziare
+    try{ await r2Send("DELETE","export-cancel/"+driveFileId+".json",null); }catch(_){}
     for(let i=0;i<edl.length;i++){
+      // l'utente ha chiesto di annullare?
+      let cancelReq=null; try{ cancelReq=await r2GetJson("export-cancel/"+driveFileId+".json"); }catch(_){}
+      if(cancelReq){
+        try{ await r2Send("DELETE","export-cancel/"+driveFileId+".json",null); }catch(_){}
+        segFiles.forEach(f=>{ try{fs.unlinkSync(f);}catch(_){} }); segFiles=[];
+        await r2PutJson("esportazioni/"+driveFileId+".json", { done:true, cancelled:true, at:new Date().toISOString() });
+        console.log("Export annullato dall'utente.");
+        return {statusCode:200};
+      }
       const iv=edl[i];
       const seg="/tmp/seg_"+stamp+"_"+i+".ts";
       const args=["-y","-ss",String(iv.start),"-headers","Authorization: Bearer "+token+"\r\n","-i",driveUrl,"-t",String(iv.end-iv.start)];
       if(vf) args.push("-vf",vf);
       args.push("-c:v","libx264","-preset","superfast","-crf",String(q.crf),"-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-f","mpegts",seg);
-      await runFFmpeg(args);
+      await runFFmpeg(args, async (sec)=>{
+        const now=Date.now();
+        if(now-lastBeat>4000){ lastBeat=now; const pct=Math.max(1,Math.min(98,Math.round((doneDur+sec)/totalDur*100))); try{ await r2PutJson("esportazioni/"+driveFileId+".json",{ done:false, progress:pct, at:new Date().toISOString() }); }catch(_){} }
+      });
       segFiles.push(seg);
       doneDur+=(iv.end-iv.start);
       const pct=Math.max(1, Math.min(98, Math.round(doneDur/totalDur*100)));
