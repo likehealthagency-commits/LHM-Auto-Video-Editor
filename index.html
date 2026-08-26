@@ -142,7 +142,7 @@
   .exportbox{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
   .exportmsg{font-size:13px;color:var(--muted)}
   .qsel{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
-  .enhrow{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);margin:-4px 0 14px;cursor:pointer}
+  .enhrow{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);margin:-4px 0 14px;flex-wrap:wrap}
   .dllink{text-decoration:none;display:inline-flex;align-items:center;background:#0F9D58;color:#fff;border:none}
   .dllink:hover{opacity:.9}
   .covinfo{margin-top:8px;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -419,7 +419,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
   const [link,setLink]=useState(""); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
   const [live,setLive]=useState({}); const pollRef=useRef(null);
   const [editing,setEditing]=useState(false); const [tempName,setTempName]=useState("");
-  const [enhanceAudio,setEnhanceAudio]=useState(true);
+  const [audioMode,setAudioMode]=useState("base");
 
   async function load(){ try{ const d=await api("get",{projectId}); setProject(d.project); refreshStatuses(d.project);}catch(e){ setErr(e.message);} }
   async function refreshStatuses(prj){
@@ -452,7 +452,7 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
   async function delRaw(raw){ if(!confirm("Rimuovere questo grezzo dal progetto?"))return; try{ const d=await api("deleteRaw",{projectId,rawId:raw.id}); setProject(d.project);}catch(e){setErr(e.message);} }
   async function transcribe(raw){
     setLive(L=>({...L,[raw.id]:{...(L[raw.id]||{}),status:"working",startedAt:Date.now(),tx:null,error:null,analysis:null}}));
-    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId,enhance:enhanceAudio})}); }
+    try{ await fetch(TRANSCRIBE,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({driveFileId:raw.driveFileId,enhance:audioMode})}); }
     catch(e){ setLive(L=>({...L,[raw.id]:{...L[raw.id],status:"error",error:"Avvio non riuscito: "+e.message}})); }
   }
   async function viewTx(raw){ try{ const d=await api("transcript",{driveFileId:raw.driveFileId}); setLive(L=>({...L,[raw.id]:{...L[raw.id],tx:d.transcript}}));}catch(e){ setErr(e.message);} }
@@ -515,7 +515,12 @@ function ProjectView({projectId,onBack,onDeleted,onOpenEditor}){
         <input className="field" placeholder="Incolla il link Drive del grezzo…" value={link} onChange={e=>setLink(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addRaw();}} />
         <button className="btn pri" onClick={addRaw} disabled={busy||!link.trim()}>{busy?<span className="spin"></span>:"Aggiungi"}</button>
       </div>
-      <label className="enhrow"><input type="checkbox" checked={enhanceAudio} onChange={e=>setEnhanceAudio(e.target.checked)} /> Pulisci l’audio prima di trascrivere (togli rumori e normalizza il volume)</label>
+      <div className="enhrow">
+        <span>Pulizia audio in trascrizione:</span>
+        {[["Nessuna","none"],["Base (gratis)","base"],["Potente (a pagamento)","power"]].map(o=>(
+          <button key={o[1]} className={"btn sm"+(audioMode===o[1]?" pri":"")} onClick={()=>setAudioMode(o[1])}>{o[0]}</button>
+        ))}
+      </div>
       {raws.length===0
         ? <div className="empty"><h3>Nessun grezzo, ancora</h3>Incolla qui sopra il link del primo video. I grezzi restano nell'ordine in cui li aggiungi.</div>
         : <div className="seq">{raws.map((r,i)=><Take key={r.id} raw={r} index={i} total={raws.length} onMove={move} onDelete={delRaw} onTranscribe={transcribe} onAnalyze={analyze} onToggle={toggleDecision} onApprove={approveAndEdit} onResilence={resilence} onStartSplit={startSplit} onDoSplit={doSplit} onCancelSplit={cancelSplit} onUndo={undoEdit} onRedo={redoEdit} onSetTimes={setTimes} live={liveFor(r)} />)}</div>}
