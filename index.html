@@ -209,13 +209,18 @@ function Progress({startedAt}){
 
 function ExportBox({driveFileId}){
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(""); const [url,setUrl]=useState(""); const [quality,setQuality]=useState("1080"); const [format,setFormat]=useState("original"); const [progress,setProgress]=useState(0);
+  const cancelRef=useRef(false);
+  async function doCancel(){ cancelRef.current=true; try{ await api("exportCancel",{driveFileId}); }catch(_){} setBusy(false); setProgress(0); setMsg("Annullamento richiesto… l'operazione si ferma a breve."); }
   async function doExport(){
+    cancelRef.current=false;
     setBusy(true); setUrl(""); setProgress(0); setMsg("Esportazione in corso… rimonta e ri-codifica il video.");
     try{
       await exportApi(driveFileId,quality,format);
       let done=null;
-      for(let i=0;i<320 && !done;i++){ await new Promise(r=>setTimeout(r,2500)); try{ const d=await api("exportStatus",{driveFileId}); if(d.status && d.status.done) done=d.status; else if(d.status && typeof d.status.progress==="number") setProgress(d.status.progress); }catch(_){} }
-      if(done && done.error) setMsg("Errore nell'esportazione: "+done.error);
+      for(let i=0;i<320 && !done;i++){ await new Promise(r=>setTimeout(r,2500)); if(cancelRef.current) return; try{ const d=await api("exportStatus",{driveFileId}); if(d.status && d.status.done) done=d.status; else if(d.status && typeof d.status.progress==="number") setProgress(d.status.progress); }catch(_){} }
+      if(cancelRef.current) return;
+      if(done && done.cancelled) setMsg("Esportazione annullata.");
+      else if(done && done.error) setMsg("Errore nell'esportazione: "+done.error);
       else if(done){ setUrl(done.url); setMsg("Pronto! "+(done.sizeMB?done.sizeMB+" MB":"")+(done.parts?" · "+done.parts+" spezzoni":"")); }
       else setMsg("Sta impiegando piu' del previsto: attendi e riprova a controllare.");
     }catch(e){ setMsg("Errore: "+e.message); }
@@ -236,6 +241,7 @@ function ExportBox({driveFileId}){
       <button className="btn pri" disabled={busy} onClick={doExport}>{busy?"Esporto…":"⬇ Esporta video"}</button>
       {url && <a className="btn sm dllink" href={url} target="_blank" rel="noopener noreferrer" download>Scarica il video</a>}
       {busy && <span className="pbarwrap"><span className="pbar"><span className="pbarfill" style={{width:progress+"%"}}></span></span><span className="pbarpct mono">{progress>0?progress+"%":"avvio…"}</span></span>}
+      {busy && <button className="btn sm ghost danger" onClick={doCancel}>Annulla</button>}
       {msg && <span className="exportmsg">{msg}</span>}
     </div>
   );
