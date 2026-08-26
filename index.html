@@ -142,6 +142,10 @@
   .exportbox{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
   .exportmsg{font-size:13px;color:var(--muted)}
   .qsel{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+  .pbarwrap{display:inline-flex;align-items:center;gap:8px}
+  .pbar{width:160px;height:8px;background:var(--line);border-radius:6px;overflow:hidden}
+  .pbarfill{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .4s ease}
+  .pbarpct{font-size:12px;color:var(--muted);min-width:44px}
   .enhrow{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);margin:-4px 0 14px;flex-wrap:wrap}
   .dllink{text-decoration:none;display:inline-flex;align-items:center;background:#0F9D58;color:#fff;border:none}
   .dllink:hover{opacity:.9}
@@ -204,13 +208,13 @@ function Progress({startedAt}){
 }
 
 function ExportBox({driveFileId}){
-  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(""); const [url,setUrl]=useState(""); const [quality,setQuality]=useState("1080"); const [format,setFormat]=useState("original");
+  const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(""); const [url,setUrl]=useState(""); const [quality,setQuality]=useState("1080"); const [format,setFormat]=useState("original"); const [progress,setProgress]=useState(0);
   async function doExport(){
-    setBusy(true); setUrl(""); setMsg("Esportazione in corso… puo' richiedere qualche minuto (rimonta e ri-codifica il video).");
+    setBusy(true); setUrl(""); setProgress(0); setMsg("Esportazione in corso… rimonta e ri-codifica il video.");
     try{
       await exportApi(driveFileId,quality,format);
       let done=null;
-      for(let i=0;i<200 && !done;i++){ await new Promise(r=>setTimeout(r,4000)); try{ const d=await api("exportStatus",{driveFileId}); if(d.status && d.status.done) done=d.status; }catch(_){} }
+      for(let i=0;i<320 && !done;i++){ await new Promise(r=>setTimeout(r,2500)); try{ const d=await api("exportStatus",{driveFileId}); if(d.status && d.status.done) done=d.status; else if(d.status && typeof d.status.progress==="number") setProgress(d.status.progress); }catch(_){} }
       if(done && done.error) setMsg("Errore nell'esportazione: "+done.error);
       else if(done){ setUrl(done.url); setMsg("Pronto! "+(done.sizeMB?done.sizeMB+" MB":"")+(done.parts?" · "+done.parts+" spezzoni":"")); }
       else setMsg("Sta impiegando piu' del previsto: attendi e riprova a controllare.");
@@ -231,6 +235,7 @@ function ExportBox({driveFileId}){
       </span>
       <button className="btn pri" disabled={busy} onClick={doExport}>{busy?"Esporto…":"⬇ Esporta video"}</button>
       {url && <a className="btn sm dllink" href={url} target="_blank" rel="noopener noreferrer" download>Scarica il video</a>}
+      {busy && <span className="pbarwrap"><span className="pbar"><span className="pbarfill" style={{width:progress+"%"}}></span></span><span className="pbarpct mono">{progress>0?progress+"%":"avvio…"}</span></span>}
       {msg && <span className="exportmsg">{msg}</span>}
     </div>
   );
