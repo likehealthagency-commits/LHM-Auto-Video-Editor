@@ -93,9 +93,16 @@ exports.handler = async (event) => {
   const Q={ originale:{t:0,crf:20}, "1080":{t:1080,crf:23}, "720":{t:720,crf:26} };
   const q=Q[body.quality]||Q["1080"];
   const out="/tmp/export_"+Date.now()+".mp4";
-  const filterFile="/tmp/filter_"+Date.now()+".txt";
+  let segFiles=[];
   try{
-    await r2PutJson("esportazioni/"+driveFileId+".json", { done:false, at:new Date().toISOString() });
+    // ANTI-DOPPIONE: se un export dello stesso video e' gia' in corso (o Netlify ha ritentato dopo un timeout), salto
+    let existing=null; try{ existing=await r2GetJson("esportazioni/"+driveFileId+".json"); }catch(_){}
+    if(existing && existing.done===false && existing.at){
+      const age=Date.now()-new Date(existing.at).getTime();
+      if(age>=0 && age<16*60*1000){ console.log("Export gia' in corso (eta' "+Math.round(age/1000)+"s): salto questa esecuzione."); return {statusCode:200}; }
+    }
+    await r2PutJson("esportazioni/"+driveFileId+".json", { done:false, progress:0, at:new Date().toISOString() });
+
     const a=await r2GetJson("analyses/"+driveFileId+".json");
     if(!a) throw new Error("Analisi non trovata: apri il progetto e genera i tagli.");
     let edl=((a.keepManual&&a.keepManual.length)?a.keepManual:(a.keep||[]))
@@ -109,14 +116,8 @@ exports.handler = async (event) => {
     const token=await getSaToken(sa, SCOPE);
     const driveUrl="https://www.googleapis.com/drive/v3/files/"+encodeURIComponent(driveFileId)+"?alt=media&supportsAllDrives=true";
 
-    const parts=[], labels=[];
-    edl.forEach((iv,i)=>{
-      parts.push("[0:v]trim=start="+iv.start+":end="+iv.end+",setpts=PTS-STARTPTS[v"+i+"]");
-      parts.push("[0:a]atrim=start="+iv.start+":end="+iv.end+",asetpts=PTS-STARTPTS[a"+i+"]");
-      labels.push("[v"+i+"][a"+i+"]");
-    });
-    let filter=parts.join(";")+";"+labels.join("")+"concat=n="+edl.length+":v=1:a=1[outv][outa]";
-    let vmap="[outv]";
+    // filtro video per formato/qualita', applicato a OGNI spezzone
+    let vf=null;
     const fmts={ "9:16":[9,16], "16:9":[16,9], "1:1":[1,1], "4:5":[4,5] };
     const fmt=fmts[body.format];
     if(fmt){
@@ -124,34 +125,44 @@ exports.handler = async (event) => {
       let W,H;
       if(aw<ah){ W=S; H=Math.round(S*ah/aw); } else if(aw>ah){ H=S; W=Math.round(S*aw/ah); } else { W=S; H=S; }
       W-=W%2; H-=H%2;
-      filter+=";[outv]scale="+W+":"+H+":force_original_aspect_ratio=increase,crop="+W+":"+H+"[outvs]"; vmap="[outvs]";
+      vf="scale="+W+":"+H+":force_original_aspect_ratio=increase,crop="+W+":"+H;
     } else if(q.t>0){
-      filter+=";[outv]scale='if(gt(iw,ih),-2,min("+q.t+",iw))':'if(gt(iw,ih),min("+q.t+",ih),-2)'[outvs]"; vmap="[outvs]";
+      vf="scale='if(gt(iw,ih),-2,min("+q.t+",iw))':'if(gt(iw,ih),min("+q.t+",ih),-2)'";
     }
-    fs.writeFileSync(filterFile, filter);
 
-    console.log("Esporto "+edl.length+" spezzoni (qualita' "+(body.quality||"1080")+", formato "+(body.format||"original")+", crf "+q.crf+")...");
-    const totalDur = edl.reduce((a,iv)=>a+(iv.end-iv.start),0) || 1;
-    let lastProg=0;
-    await runFFmpeg(["-y","-headers","Authorization: Bearer "+token+"\r\n","-i",driveUrl,
-      "-filter_complex_script",filterFile,"-map",vmap,"-map","[outa]",
-      "-c:v","libx264","-preset","superfast","-crf",String(q.crf),"-pix_fmt","yuv420p",
-      "-c:a","aac","-b:a","128k","-movflags","+faststart", out],
-      async (sec)=>{
-        const pct=Math.max(1, Math.min(99, Math.round(sec/totalDur*100)));
-        const now=Date.now();
-        if(now-lastProg>2500){ lastProg=now; try{ await r2PutJson("esportazioni/"+driveFileId+".json", { done:false, progress:pct, at:new Date().toISOString() }); }catch(_){} }
-      });
+    console.log("Esporto "+edl.length+" spezzoni A SALTI (qualita' "+(body.quality||"1080")+", formato "+(body.format||"original")+", crf "+q.crf+")...");
+    const totalDur = edl.reduce((acc,iv)=>acc+(iv.end-iv.start),0) || 1;
+    let doneDur=0;
+    const stamp=Date.now();
+    // estraggo ogni spezzone SALTANDO direttamente al suo punto: legge da Drive solo quel pezzo, non tutto il file
+    for(let i=0;i<edl.length;i++){
+      const iv=edl[i];
+      const seg="/tmp/seg_"+stamp+"_"+i+".ts";
+      const args=["-y","-ss",String(iv.start),"-headers","Authorization: Bearer "+token+"\r\n","-i",driveUrl,"-t",String(iv.end-iv.start)];
+      if(vf) args.push("-vf",vf);
+      args.push("-c:v","libx264","-preset","superfast","-crf",String(q.crf),"-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-f","mpegts",seg);
+      await runFFmpeg(args);
+      segFiles.push(seg);
+      doneDur+=(iv.end-iv.start);
+      const pct=Math.max(1, Math.min(98, Math.round(doneDur/totalDur*100)));
+      try{ await r2PutJson("esportazioni/"+driveFileId+".json", { done:false, progress:pct, at:new Date().toISOString() }); }catch(_){}
+    }
+
+    // ricucio gli spezzoni senza ri-codificare (concatenazione veloce)
+    console.log("Ricucio "+segFiles.length+" spezzoni...");
+    await runFFmpeg(["-y","-i","concat:"+segFiles.join("|"),"-c","copy","-bsf:a","aac_adtstoasc","-movflags","+faststart",out]);
+    segFiles.forEach(f=>{ try{fs.unlinkSync(f);}catch(_){} }); segFiles=[];
 
     const buf=fs.readFileSync(out);
     await r2Put("exports/"+driveFileId+".mp4", buf, "video/mp4");
-    try{fs.unlinkSync(out);}catch(_){} try{fs.unlinkSync(filterFile);}catch(_){}
+    try{fs.unlinkSync(out);}catch(_){}
     const url=r2PresignGet("exports/"+driveFileId+".mp4", 7200);
     await r2PutJson("esportazioni/"+driveFileId+".json", { done:true, url, at:new Date().toISOString(), parts:edl.length, sizeMB:+(buf.length/1048576).toFixed(1), quality:(body.quality||"1080"), format:(body.format||"original") });
     console.log("Esportazione completata: "+(buf.length/1048576).toFixed(1)+" MB");
     return {statusCode:200};
   }catch(e){
-    try{fs.unlinkSync(out);}catch(_){} try{fs.unlinkSync(filterFile);}catch(_){}
+    try{fs.unlinkSync(out);}catch(_){}
+    segFiles.forEach(f=>{ try{fs.unlinkSync(f);}catch(_){} });
     const msg=String((e&&e.message)||e).slice(0,300);
     console.log("ESPORTA ERRORE:", msg);
     try{ await r2PutJson("esportazioni/"+driveFileId+".json", { done:true, error:msg, at:new Date().toISOString() }); }catch(_){}
